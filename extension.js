@@ -203,23 +203,146 @@ function solveTextForLc(bgOklab, targetLc, chromaA, chromaB) {
   return oklabToHex({ L: bestL, a: chromaA, b: chromaB });
 }
 
-function deriveSyntax(bgOklab, lcAdjust) {
+function deriveSyntax(bgOklab, lcAdjust, chromaBase) {
   lcAdjust = lcAdjust || {};
+  chromaBase = chromaBase || {};
   const result = {};
 
   for (const key of Object.keys(TOKENS)) {
     const t = TOKENS[key];
     const targetLc = t.lc + (lcAdjust[key] || 0);
 
-    let a = t.a;
-    let b = t.b;
-    if (key === 'fg')  { a = bgOklab.a * 0.2 + t.a; b = bgOklab.b * 0.2 + t.b; }
-    if (key === 'com') { a = bgOklab.a * 0.3 + t.a; b = bgOklab.b * 0.3 + t.b; }
+    let a, b;
+    if (chromaBase[key]) {
+      // Если знаем оттенок из текущей темы — используем его
+      a = chromaBase[key].a;
+      b = chromaBase[key].b;
+    } else {
+      // Иначе генерируем от фона
+      a = t.a;
+      b = t.b;
+      if (key === 'fg')  { a += bgOklab.a * 0.2; b += bgOklab.b * 0.2; }
+      if (key === 'com') { a += bgOklab.a * 0.3; b += bgOklab.b * 0.3; }
+    }
 
     result[key] = solveTextForLc(bgOklab, targetLc, a, b);
   }
 
   return result;
+}
+
+// ═════════════════════════════════════════════════════════════
+//  БЛОК 4.5. Чтение активной темы VS Code
+// ═════════════════════════════════════════════════════════════
+//
+//  VS Code API отдаёт только ID активной темы, но не сами цвета.
+//  Чтобы получить цвета, находим JSON-файл темы среди установленных
+//  расширений и парсим его. Если тема встроенная (Default+, Monokai
+//  в поставке VS Code) — не найдётся, fallback на генерацию от фона.
+
+function readActiveThemeColors() {
+  const themeId = vscode.workspace.getConfiguration('workbench').get('colorTheme');
+  if (!themeId) return null;
+
+  for (const ext of vscode.extensions.all) {
+    const pkg = ext.packageJSON;
+    if (!pkg || !pkg.contributes || !Array.isArray(pkg.contributes.themes)) continue;
+
+    for (const theme of pkg.contributes.themes) {
+      if (theme.id !== themeId && theme.label !== themeId) continue;
+
+      const themePath = path.isAbsolute(theme.path)
+        ? theme.path
+        : path.join(ext.extensionPath, theme.path);
+
+      try {
+        const raw = fs.readFileSync(themePath, 'utf8');
+        const parsed = JSON.parse(raw);
+        return {
+          id: themeId,
+          colors: parsed.colors || {},
+          tokenColors: Array.isArray(parsed.tokenColors) ? parsed.tokenColors : [],
+          semanticTokenColors: parsed.semanticTokenColors || {},
+        };
+      } catch (e) {
+        console.error('Calibra: не удалось прочитать тему', themePath, e);
+        return null;
+      }
+    }
+  }
+
+  return null;
+}
+
+// Сопоставление наших токенов с TextMate scopes
+const SCOPE_MAP = {
+  kw:  ['keyword', 'storage'],
+  typ: ['entity.name.type', 'entity.name.class', 'support.type', 'support.class'],
+  fn:  ['entity.name.function', 'support.function'],
+  num: ['constant.numeric'],
+  con: ['constant.language'],
+  str: ['string'],
+  prp: ['variable.other.property', 'support.variable.property'],
+  com: ['comment'],
+};
+
+function findScopeColor(theme, scopeNames) {
+  // Сначала semanticTokenColors — там может быть точнее
+  for (const name of scopeNames) {
+    const stc = theme.semanticTokenColors[name];
+    if (typeof stc === 'string') return stc;
+    if (stc && typeof stc.foreground === 'string') return stc.foreground;
+  }
+
+  // Потом tokenColors. Идём с конца — специфичные правила ниже
+  for (let i = theme.tokenColors.length - 1; i >= 0; i--) {
+    const rule = theme.tokenColors[i];
+    if (!rule || !rule.settings) continue;
+    const scopes = Array.isArray(rule.scope) ? rule.scope : [rule.scope];
+    for (const s of scopes) {
+      if (!s || typeof s !== 'string') continue;
+      for (const name of scopeNames) {
+        if (s === name || s.indexOf(name + '.') === 0) {
+          const fg = rule.settings.foreground;
+          if (typeof fg === 'string' && fg.match(/^#[0-9a-fA-F]{3,8}$/)) {
+            return normalizeHex(fg);
+          }
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+// Приводим 3- или 8-значный HEX к 6-значному
+function normalizeHex(hex) {
+  const h = hex.replace('#', '');
+  if (h.length === 3) {
+    return '#' + h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  }
+  if (h.length === 6) {
+    return '#' + h;
+  }
+  if (h.length === 8) {
+    return '#' + h.slice(0, 6); // отбрасываем alpha
+  }
+  return null;
+}
+
+function applyTokenBaseline(state, key, hex, bgRgb) {
+  const rgb = hexToRgb(hex);
+  const rgbClamped = {
+    r: clamp(rgb.r, 0, 255),
+    g: clamp(rgb.g, 0, 255),
+    b: clamp(rgb.b, 0, 255),
+  };
+
+  const lc = Math.abs(apcaContrast(rgbClamped, bgRgb));
+  const oklab = rgbToOklab(rgb.r, rgb.g, rgb.b);
+
+  state.lcAdjust[key] = Math.round(lc - TOKENS[key].lc);
+  state.chromaBase[key] = { a: oklab.a, b: oklab.b };
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -259,19 +382,50 @@ function cloneState(s) {
   return {
     bg: { L: s.bg.L, a: s.bg.a, b: s.bg.b },
     lcAdjust: Object.assign({}, s.lcAdjust),
+    chromaBase: Object.assign({}, s.chromaBase || {}),
   };
 }
 
-function getInitialState(fromHex) {
-  return {
-    bg: hexToOklab(fromHex),
+// Строит начальное состояние. Если удалось прочитать активную
+// тему — берёт её цвета как отправную точку. Иначе работает
+// от фона, как раньше.
+function getInitialState(bgHex, themeInfo) {
+  const bg = hexToOklab(bgHex);
+
+  const state = {
+    bg,
     lcAdjust: {},
+    chromaBase: {},
   };
+
+  if (!themeInfo) return state;
+
+  const bgRgbRaw = hexToRgb(bgHex);
+  const bgRgb = {
+    r: clamp(bgRgbRaw.r, 0, 255),
+    g: clamp(bgRgbRaw.g, 0, 255),
+    b: clamp(bgRgbRaw.b, 0, 255),
+  };
+
+  // fg берём из editor.foreground
+  const fgHex = themeInfo.colors['editor.foreground'];
+  if (fgHex) {
+    const norm = normalizeHex(fgHex);
+    if (norm) applyTokenBaseline(state, 'fg', norm, bgRgb);
+  }
+
+  // Остальные токены — из tokenColors
+  for (const key of Object.keys(SCOPE_MAP)) {
+    const hex = findScopeColor(themeInfo, SCOPE_MAP[key]);
+    if (hex) applyTokenBaseline(state, key, hex, bgRgb);
+  }
+
+  return state;
 }
 
 function stateToVariant(state) {
   const bgHex = oklabToHex(state.bg);
-  const syn = deriveSyntax(state.bg, state.lcAdjust);
+  const syn = deriveSyntax(state.bg, state.lcAdjust, state.chromaBase);
   const ui = deriveEditorUI(state.bg);
   return Object.assign({ bg: bgHex }, syn, ui);
 }
@@ -281,7 +435,7 @@ const STEP_TITLES_TOTAL = 11;
 const STEPS = [
   {
     title: `Шаг 1 из ${STEP_TITLES_TOTAL}. Тип темы`,
-    hint: 'Вариант A — яркость вашей текущей темы. Остальные — её вариации.',
+    hint: 'Вариант A — ваша текущая тема. Остальные — её вариации.',
     highlight: null,
     make: (s) => {
       const currentL = s.bg.L;
@@ -895,15 +1049,30 @@ async function startCalibration(resumeData) {
     sessionSnapshot = captureCurrentColors();
   }
 
+  // Читаем активную тему — один раз за сессию калибровки
+  let themeInfo = null;
+  try {
+    themeInfo = readActiveThemeColors();
+  } catch (e) {
+    console.error('Calibra: ошибка чтения темы', e);
+  }
+
   let initialState;
   let initialStep;
+  let themeName = null;
+
   if (resumeData && resumeData.state && resumeData.state.bg) {
     initialState = cloneState(resumeData.state);
     initialStep = clamp(resumeData.step || 1, 1, STEPS.length);
   } else {
-    const startHex = sessionSnapshot.workbench['editor.background'] || '#1e1e1e';
-    initialState = getInitialState(startHex);
+    const startHex =
+      (themeInfo && themeInfo.colors['editor.background']) ||
+      sessionSnapshot.workbench['editor.background'] ||
+      '#1e1e1e';
+
+    initialState = getInitialState(startHex, themeInfo);
     initialStep = 1;
+    themeName = themeInfo ? themeInfo.id : null;
   }
 
   const panel = vscode.window.createWebviewPanel(
@@ -918,6 +1087,7 @@ async function startCalibration(resumeData) {
     step: initialStep,
     candidates: STEPS[initialStep - 1].make(initialState),
     panel,
+    themeName,
   };
 
   panel.webview.html = getHtml();
@@ -962,6 +1132,7 @@ function sendRender() {
     stepNumber: calib.step,
     totalSteps: total,
     activeProfileName,
+    themeName: calib.themeName,
     cards,
   });
 }
@@ -1170,7 +1341,6 @@ function buildPreviewHtml(v, highlight) {
   return buildFullPreview(v);
 }
 
-// Полное превью — для шагов про фон (1–6, 11)
 function buildFullPreview(v) {
   const h = null;
   return [
@@ -1213,10 +1383,8 @@ function buildFullPreview(v) {
   ].join('\n');
 }
 
-// Фокусированное превью — для шагов контраста (7–10)
 function buildFocusedPreview(v, highlight) {
   if (highlight === 'com') {
-    // Комментарии. Четыре строки подряд, чтобы сравнение было мгновенным.
     return [
       hl('// fetch user with caching', v.com, 'com', highlight),
       hl('// returns null when id is invalid', v.com, 'com', highlight),
@@ -1230,7 +1398,6 @@ function buildFocusedPreview(v, highlight) {
   }
 
   if (highlight === 'fg') {
-    // Основной текст. Переменные доминируют, всё остальное — служебное.
     return [
       hl('const', v.kw, 'kw', highlight) + ' ' +
         hl('user', v.fg, 'fg', highlight) + ' = ' +
@@ -1261,7 +1428,6 @@ function buildFocusedPreview(v, highlight) {
   }
 
   if (highlight === 'prp') {
-    // Свойства объектов. Каждая строка содержит минимум одно свойство.
     return [
       hl('const', v.kw, 'kw', highlight) + ' cached = ' +
         hl('store', v.fg, 'fg', highlight) + '.' +
@@ -1291,7 +1457,6 @@ function buildFocusedPreview(v, highlight) {
   if (Array.isArray(highlight) &&
       highlight.indexOf('str') >= 0 &&
       highlight.indexOf('num') >= 0) {
-    // Строки и числа. Оба типа в одном фрагменте.
     return [
       hl('const', v.kw, 'kw', highlight) + ' key = ' +
         hl("'user:'", v.str, 'str', highlight) + ' + id;',
@@ -1355,11 +1520,12 @@ function getHtml() {
       margin: 0 0 10px 0;
       line-height: 1.4;
     }
-    .active {
-      font-size: 12px;
+    .meta {
+      font-size: 11px;
       opacity: 0.55;
       margin: 0 0 12px 0;
       font-style: italic;
+      line-height: 1.5;
     }
     .progress {
       height: 3px;
@@ -1447,7 +1613,7 @@ function getHtml() {
   <div class="header">
     <h1 id="title">Загрузка…</h1>
     <p class="hint" id="hint"></p>
-    <p class="active" id="active" style="display:none;"></p>
+    <p class="meta" id="meta"></p>
     <div class="progress"><div class="progress-bar" id="bar"></div></div>
   </div>
 
@@ -1462,7 +1628,7 @@ function getHtml() {
     var grid = document.getElementById('grid');
     var titleEl = document.getElementById('title');
     var hintEl = document.getElementById('hint');
-    var activeEl = document.getElementById('active');
+    var metaEl = document.getElementById('meta');
     var barEl = document.getElementById('bar');
     var finishBtn = document.getElementById('finish');
 
@@ -1504,12 +1670,14 @@ function getHtml() {
         hintEl.textContent = msg.hint || '';
         barEl.style.width = Math.round((msg.progress || 0) * 100) + '%';
 
-        if (msg.activeProfileName) {
-          activeEl.textContent = 'Активный профиль: ' + msg.activeProfileName;
-          activeEl.style.display = '';
-        } else {
-          activeEl.style.display = 'none';
+        var meta = [];
+        if (msg.themeName) {
+          meta.push('Отправная тема: ' + msg.themeName);
         }
+        if (msg.activeProfileName) {
+          meta.push('Активный профиль: ' + msg.activeProfileName);
+        }
+        metaEl.textContent = meta.join(' · ');
 
         renderCards(msg.cards);
       }
