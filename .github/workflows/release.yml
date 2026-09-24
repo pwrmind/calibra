@@ -3,10 +3,10 @@ name: Build and Release VSIX
 on:
   push:
     tags:
-      - 'v*' # Сработает, когда вы отправите тег, например v0.6.0
+      - 'v*'
 
 permissions:
-  contents: write # Дает право GitHub Actions загружать файлы в Релизы
+  contents: write
 
 jobs:
   release:
@@ -19,23 +19,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          # Убрали строку cache: 'npm', чтобы не искать lock-файлы
 
       - name: Install dependencies
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
+        run: npm install # Используем обычный install, он создаст всё сам на лету
 
-      # Собираем .vsix пакет. Флаг --no-dependencies предотвращает лишний аудит
       - name: Build VSIX Package
         run: |
           npm install -g @vscode/vsce
           vsce package --no-dependencies -o calibra.vsix
 
-      # Создаем GitHub Release и прикрепляем calibra.vsix
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
