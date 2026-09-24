@@ -1,0 +1,43 @@
+{
+  "name": "calibra",
+  "displayName": "Calibra",
+  "description": "Персональная калибровка темы VS Code под ваше зрение",
+  "version": "0.3.0",
+  "publisher": "your-name",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Themes",
+    "Other"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "calibra.start",
+        "title": "Calibra: начать калибровку"
+      },
+      {
+        "command": "calibra.resume",
+        "title": "Calibra: продолжить с последнего состояния"
+      },
+      {
+        "command": "calibra.reset",
+        "title": "Calibra: сбросить цвета"
+      },
+      {
+        "command": "calibra.save",
+        "title": "Calibra: сохранить текущие цвета как профиль"
+      },
+      {
+        "command": "calibra.restore",
+        "title": "Calibra: восстановить сохранённый профиль"
+      },
+      {
+        "command": "calibra.forget",
+        "title": "Calibra: забыть сохранённый профиль и состояние"
+      }
+    ]
+  }
+}
