@@ -19,13 +19,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: ''
 
-      # Так как вы собирали всё вручную и зависимостей в проекте нет,
-      # мы просто пропускаем шаг npm install и сразу упаковываем файлы
+      - name: Install vsce
+        run: npm install -g @vscode/vsce
+
       - name: Build VSIX Package
-        run: |
-          npm install -g @vscode/vsce
-          vsce package --no-dependencies -o calibra.vsix
+        run: vsce package --no-dependencies -o calibra.vsix
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
