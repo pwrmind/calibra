@@ -223,270 +223,31 @@ function deriveSyntax(bgOklab, lcAdjust) {
 }
 
 // ═════════════════════════════════════════════════════════════
-//  БЛОК 5. Акцент и UI-элементы
+//  БЛОК 5. Служебные элементы редактора
 // ═════════════════════════════════════════════════════════════
 
-function deriveAccent(bg) {
-  const hueMag = Math.hypot(bg.a, bg.b);
-  let accentA, accentB;
-  if (hueMag < 0.008) {
-    accentA = -0.04;
-    accentB = -0.13;
-  } else {
-    const norm = 0.14 / hueMag;
-    accentA = bg.a * norm;
-    accentB = bg.b * norm;
-  }
-  const accentHex = solveTextForLc(bg, 60, accentA, accentB);
-  return hexToOklab(accentHex);
-}
-
-function deriveAnsi(bg) {
-  const dark = bg.L < 0.5;
-  const baseL   = dark ? 0.66 : 0.42;
-  const brightL = dark ? 0.82 : 0.30;
-
-  const hues = {
-    red:     { a:  0.15, b:  0.04 },
-    green:   { a: -0.10, b:  0.10 },
-    yellow:  { a: -0.02, b:  0.14 },
-    blue:    { a: -0.04, b: -0.13 },
-    magenta: { a:  0.15, b: -0.08 },
-    cyan:    { a: -0.10, b: -0.06 },
-  };
-
-  const ansi = {
-    black:       oklabToHex({ L: dark ? clamp(bg.L + 0.03, 0.03, 0.12) : 0.10, a: 0, b: 0 }),
-    white:       oklabToHex({ L: dark ? 0.84 : 0.28, a: 0, b: 0 }),
-    brightBlack: oklabToHex({ L: dark ? 0.45 : 0.50, a: 0, b: 0 }),
-    brightWhite: oklabToHex({ L: dark ? 0.96 : 0.08, a: 0, b: 0 }),
-  };
-
-  for (const name of Object.keys(hues)) {
-    const h = hues[name];
-    ansi[name] = oklabToHex({ L: baseL, a: h.a, b: h.b });
-    const cap = name[0].toUpperCase() + name.slice(1);
-    ansi['bright' + cap] = oklabToHex({
-      L: brightL,
-      a: h.a * 1.05,
-      b: h.b * 1.05,
-    });
-  }
-
-  return ansi;
-}
-
-function deriveUI(bg, accent) {
-  const accentHex = oklabToHex(accent);
-
-  // ─── Две разные функции плоскостей ─────────────────────
-  //
-  //  chromeSurface — для "обвязки" интерфейса: sidebar, activity bar,
-  //  панель, вкладки, поля ввода. Всегда идут в одну сторону от
-  //  редактора к краям, независимо от полярности темы. На тёмной
-  //  теме — темнее, на светлой — тоже темнее. Это то, что делает
-  //  chrome видимым как отдельный слой.
-  //
-  //  overlaySurface — для элементов, которые лежат "поверх"
-  //  основного фона: виджеты, selection, hover, скроллбар.
-  //  Направление зависит от полярности: на тёмной — светлее,
-  //  на светлой — темнее. Иначе на светлых темах они сливаются
-  //  с фоном и становятся невидимыми.
-
-  const chromeSurface = (dL) => oklabToHex({
-    L: clamp(bg.L + dL, 0.02, 0.98),
-    a: bg.a + accent.a * 0.02,
-    b: bg.b + accent.b * 0.02,
+function overlayHex(bg, magnitude) {
+  const dir = bg.L > 0.5 ? -1 : 1;
+  return oklabToHex({
+    L: clamp(bg.L + dir * magnitude, 0.02, 0.98),
+    a: bg.a,
+    b: bg.b,
   });
+}
 
-  const overlaySurface = (magnitude) => {
-    const dir = bg.L > 0.5 ? -1 : 1;
-    return oklabToHex({
-      L: clamp(bg.L + dir * magnitude, 0.02, 0.98),
-      a: bg.a + accent.a * 0.02,
-      b: bg.b + accent.b * 0.02,
-    });
-  };
-
-  const textOn = (surfaceHex, lc) => {
-    const sOklab = hexToOklab(surfaceHex);
-    return solveTextForLc(sOklab, lc, bg.a * 0.1, bg.b * 0.1);
-  };
-
-  // Chrome-плоскости
-  const sideBarBg      = chromeSurface(-0.02);
-  const activityBarBg  = chromeSurface(-0.08);
-  const panelBg        = chromeSurface(-0.025);
-  const tabInactiveBg  = chromeSurface(-0.03);
-  const inputBg        = chromeSurface(-0.04);
-  const dropdownBg     = chromeSurface(-0.03);
-  const sideBarHeaderBg = chromeSurface(-0.04);
-  const activityActiveBg = chromeSurface(-0.03);
-
-  // Overlay-плоскости
-  const widgetBg       = overlaySurface(0.03);
-  const selectionBg    = overlaySurface(0.06);
-
-  const ansi = deriveAnsi(bg);
-
-  const sideBarFg       = textOn(sideBarBg, 70);
-  const activityBarFg   = textOn(activityBarBg, 70);
-  const panelFg         = textOn(panelBg, 70);
-  const tabInactiveFg   = textOn(tabInactiveBg, 50);
-  const inputFg         = textOn(inputBg, 80);
-  const dropdownFg      = textOn(dropdownBg, 80);
-  const widgetFg        = textOn(widgetBg, 80);
-  const selectionFg     = textOn(selectionBg, 80);
-
-  const onAccent        = textOn(accentHex, 80);
-
+function deriveEditorUI(bg) {
   return {
-    // ─── Редактор ─────────────────────────────────────────
-    'editorLineNumber.foreground':        textOn(oklabToHex(bg), 38),
-    'editorLineNumber.activeForeground':  textOn(oklabToHex(bg), 60),
-    'editorCursor.foreground':            accentHex,
-    'editor.selectionBackground':         selectionBg,
-    'editor.selectionHighlightBackground': overlaySurface(0.04),
-    'editor.lineHighlightBackground':     overlaySurface(0.02),
-    'editorWhitespace.foreground':        textOn(oklabToHex(bg), 22),
-    'editorIndentGuide.background1':      textOn(oklabToHex(bg), 18),
-    'editorIndentGuide.activeBackground1': textOn(oklabToHex(bg), 38),
-    'editorOverviewRuler.border':         chromeSurface(0.04),
-    'editorGutter.background':            oklabToHex(bg),
-    'editorBracketMatch.background':      overlaySurface(0.05),
-    'editorBracketMatch.border':          accentHex,
-
-    // ─── Sidebar ──────────────────────────────────────────
-    'sideBar.background':             sideBarBg,
-    'sideBar.foreground':             sideBarFg,
-    'sideBar.border':                 chromeSurface(0.02),
-    'sideBarSectionHeader.background': sideBarHeaderBg,
-    'sideBarSectionHeader.foreground': textOn(sideBarHeaderBg, 65),
-
-    // ─── Activity bar ─────────────────────────────────────
-    'activityBar.background':            activityBarBg,
-    'activityBar.foreground':            activityBarFg,
-    'activityBar.inactiveForeground':    textOn(activityBarBg, 40),
-    'activityBar.activeBorder':          accentHex,
-    'activityBar.activeBackground':      activityActiveBg,
-    'activityBar.border':                chromeSurface(0.02),
-    'activityBarBadge.background':       accentHex,
-    'activityBarBadge.foreground':       onAccent,
-
-    // ─── Status bar ───────────────────────────────────────
-    'statusBar.background':              accentHex,
-    'statusBar.foreground':              onAccent,
-    'statusBar.border':                  chromeSurface(0.03),
-    'statusBarItem.hoverBackground':     oklabToHex({
-      L: clamp(accent.L + 0.06, 0.02, 0.98), a: accent.a, b: accent.b,
-    }),
-    'statusBarItem.remoteBackground':    accentHex,
-    'statusBarItem.remoteForeground':    onAccent,
-
-    // ─── Title bar ────────────────────────────────────────
-    'titleBar.activeBackground':   activityBarBg,
-    'titleBar.activeForeground':   activityBarFg,
-    'titleBar.inactiveBackground': activityBarBg,
-    'titleBar.inactiveForeground': textOn(activityBarBg, 40),
-    'titleBar.border':             chromeSurface(0.02),
-
-    // ─── Вкладки ──────────────────────────────────────────
-    'tab.activeBackground':              oklabToHex(bg),
-    'tab.activeForeground':              textOn(oklabToHex(bg), 80),
-    'tab.inactiveBackground':            tabInactiveBg,
-    'tab.inactiveForeground':            tabInactiveFg,
-    'tab.border':                        chromeSurface(0.02),
-    'tab.activeBorderTop':               accentHex,
-    'tab.unfocusedActiveBorderTop':      overlaySurface(0.05),
-    'editorGroupHeader.tabsBackground':  tabInactiveBg,
-    'editorGroupHeader.tabsBorder':      chromeSurface(0.02),
-    'editorGroupHeader.noTabsBackground': tabInactiveBg,
-    'editorGroup.border':                chromeSurface(0.04),
-
-    // ─── Панель и терминал ────────────────────────────────
-    'panel.background':             panelBg,
-    'panel.foreground':             panelFg,
-    'panel.border':                 chromeSurface(0.03),
-    'panelTitle.activeForeground':  textOn(panelBg, 80),
-    'panelTitle.inactiveForeground': textOn(panelBg, 55),
-    'panelTitle.activeBorder':      accentHex,
-    'terminal.background':          panelBg,
-    'terminal.foreground':          panelFg,
-    'terminalCursor.foreground':    accentHex,
-    'terminal.selectionBackground': overlaySurface(0.06),
-    'terminal.border':              chromeSurface(0.03),
-
-    // ─── Поля ввода, выпадашки, кнопки ────────────────────
-    'input.background':               inputBg,
-    'input.foreground':               inputFg,
-    'input.border':                   chromeSurface(0.05),
-    'input.placeholderForeground':    textOn(inputBg, 45),
-    'inputOption.activeBackground':   accentHex,
-    'inputOption.activeForeground':   onAccent,
-    'dropdown.background':            dropdownBg,
-    'dropdown.foreground':            dropdownFg,
-    'dropdown.border':                chromeSurface(0.05),
-    'button.background':              accentHex,
-    'button.foreground':              onAccent,
-    'button.hoverBackground':         oklabToHex({
-      L: clamp(accent.L + 0.06, 0.02, 0.98), a: accent.a, b: accent.b,
-    }),
-    'button.secondaryBackground':     overlaySurface(0.06),
-    'button.secondaryForeground':     textOn(overlaySurface(0.06), 80),
-    'button.secondaryHoverBackground': overlaySurface(0.09),
-
-    // ─── Фокус и списки ───────────────────────────────────
-    'focusBorder':                        accentHex,
-    'list.activeSelectionBackground':     selectionBg,
-    'list.activeSelectionForeground':     selectionFg,
-    'list.inactiveSelectionBackground':   overlaySurface(0.03),
-    'list.hoverBackground':               overlaySurface(0.04),
-    'list.focusOutline':                  accentHex,
-    'list.highlightForeground':           accentHex,
-
-    // ─── Бейджи ───────────────────────────────────────────
-    'badge.background': accentHex,
-    'badge.foreground': onAccent,
-
-    // ─── Скроллбар ────────────────────────────────────────
-    'scrollbar.shadow':                    'transparent',
-    'scrollbarSlider.background':          overlaySurface(0.10),
-    'scrollbarSlider.hoverBackground':     overlaySurface(0.14),
-    'scrollbarSlider.activeBackground':    overlaySurface(0.18),
-
-    // ─── Minimap ──────────────────────────────────────────
-    'minimap.background':           oklabToHex(bg),
-    'minimap.selectionHighlight':   overlaySurface(0.10),
-
-    // ─── Виджеты редактора ────────────────────────────────
-    'editorWidget.background':                  widgetBg,
-    'editorWidget.foreground':                  widgetFg,
-    'editorWidget.border':                      chromeSurface(0.06),
-    'editorSuggestWidget.background':           widgetBg,
-    'editorSuggestWidget.foreground':           widgetFg,
-    'editorSuggestWidget.selectedBackground':   overlaySurface(0.06),
-
-    // ─── Уведомления ──────────────────────────────────────
-    'notifications.background': widgetBg,
-    'notifications.foreground': widgetFg,
-
-    // ─── ANSI-палитра терминала ───────────────────────────
-    'terminal.ansiBlack':         ansi.black,
-    'terminal.ansiRed':           ansi.red,
-    'terminal.ansiGreen':         ansi.green,
-    'terminal.ansiYellow':        ansi.yellow,
-    'terminal.ansiBlue':          ansi.blue,
-    'terminal.ansiMagenta':       ansi.magenta,
-    'terminal.ansiCyan':          ansi.cyan,
-    'terminal.ansiWhite':         ansi.white,
-    'terminal.ansiBrightBlack':   ansi.brightBlack,
-    'terminal.ansiBrightRed':     ansi.brightRed,
-    'terminal.ansiBrightGreen':   ansi.brightGreen,
-    'terminal.ansiBrightYellow':  ansi.brightYellow,
-    'terminal.ansiBrightBlue':    ansi.brightBlue,
-    'terminal.ansiBrightMagenta': ansi.brightMagenta,
-    'terminal.ansiBrightCyan':    ansi.brightCyan,
-    'terminal.ansiBrightWhite':   ansi.brightWhite,
+    cursor: solveTextForLc(bg, 70, bg.a * 0.6, bg.b * 0.6),
+    lineNum:       solveTextForLc(bg, 32, 0, 0),
+    lineNumActive: solveTextForLc(bg, 55, 0, 0),
+    selection:          overlayHex(bg, 0.10),
+    selectionHighlight: overlayHex(bg, 0.06),
+    lineHighlight:      overlayHex(bg, 0.03),
+    bracketMatch:       overlayHex(bg, 0.07),
+    whitespace: solveTextForLc(bg, 18, 0, 0),
+    indent:       solveTextForLc(bg, 14, 0, 0),
+    indentActive: solveTextForLc(bg, 32, 0, 0),
+    warn: solveTextForLc(bg, 65, -0.05, 0.13),
   };
 }
 
@@ -498,9 +259,6 @@ function cloneState(s) {
   return {
     bg: { L: s.bg.L, a: s.bg.a, b: s.bg.b },
     lcAdjust: Object.assign({}, s.lcAdjust),
-    accent: s.accent
-      ? { L: s.accent.L, a: s.accent.a, b: s.accent.b }
-      : undefined,
   };
 }
 
@@ -508,45 +266,42 @@ function getInitialState(fromHex) {
   return {
     bg: hexToOklab(fromHex),
     lcAdjust: {},
-    accent: undefined,
   };
 }
 
 function stateToVariant(state) {
   const bgHex = oklabToHex(state.bg);
   const syn = deriveSyntax(state.bg, state.lcAdjust);
-  const accent = state.accent || deriveAccent(state.bg);
-  const ui = deriveUI(state.bg, accent);
-
-  return Object.assign(
-    {
-      bg: bgHex,
-      accentBg: oklabToHex(accent),
-    },
-    syn,
-    { ui }
-  );
+  const ui = deriveEditorUI(state.bg);
+  return Object.assign({ bg: bgHex }, syn, ui);
 }
 
-const STEP_TITLES_TOTAL = 12;
+const STEP_TITLES_TOTAL = 11;
 
 const STEPS = [
   {
     title: `Шаг 1 из ${STEP_TITLES_TOTAL}. Тип темы`,
-    hint: 'Тёмная, светлая или что-то между? Выбирайте то, что ближе к вашему привычному ощущению.',
+    hint: 'Вариант A — яркость вашей текущей темы. Остальные — её вариации.',
     highlight: null,
     make: (s) => {
-      const targets = [0.10, 0.28, 0.72, 0.92];
-      return targets.map((targetL) => {
+      const currentL = s.bg.L;
+      const oppositeL = currentL > 0.5 ? 0.10 : 0.92;
+      const withL = (targetL) => {
         const c = cloneState(s);
-        c.bg.L = targetL;
+        c.bg.L = clamp(targetL, 0.04, 0.96);
         return c;
-      });
+      };
+      return [
+        withL(currentL),
+        withL(currentL - 0.18),
+        withL(currentL + 0.18),
+        withL(oppositeL),
+      ];
     },
   },
   {
     title: `Шаг 2 из ${STEP_TITLES_TOTAL}. Яркость фона`,
-    hint: 'Уточните уровень освещения — теперь в выбранной полярности.',
+    hint: 'Уточните уровень освещения.',
     highlight: null,
     make: (s) => [-0.06, -0.02, 0.02, 0.06].map((d) => {
       const c = cloneState(s);
@@ -608,60 +363,44 @@ const STEPS = [
     }),
   },
   {
-    title: `Шаг 7 из ${STEP_TITLES_TOTAL}. Акцентный цвет`,
-    hint: 'Цвет кнопок, фокуса, статус-бара и активных элементов.',
-    highlight: null,
-    make: (s) => [
-      { a: -0.04, b: -0.13 },
-      { a:  0.15, b: -0.08 },
-      { a: -0.10, b:  0.10 },
-      { a:  0.13, b:  0.06 },
-    ].map((p) => {
-      const c = cloneState(s);
-      const accentHex = solveTextForLc(s.bg, 60, p.a, p.b);
-      c.accent = hexToOklab(accentHex);
-      return c;
-    }),
-  },
-  {
-    title: `Шаг 8 из ${STEP_TITLES_TOTAL}. Контраст основного текста`,
-    hint: 'Насколько ярким должен быть обычный код?',
+    title: `Шаг 7 из ${STEP_TITLES_TOTAL}. Контраст основного текста`,
+    hint: 'Насколько яркими должны быть имена переменных? Смотрите на подчёркнутые слова.',
     highlight: 'fg',
-    make: (s) => [-14, -5, 5, 14].map((d) => {
+    make: (s) => [-28, -12, 12, 28].map((d) => {
       const c = cloneState(s);
       c.lcAdjust.fg = (c.lcAdjust.fg || 0) + d;
       return c;
     }),
   },
   {
-    title: `Шаг 9 из ${STEP_TITLES_TOTAL}. Контраст комментариев`,
-    hint: 'Комментарии должны быть заметнее или тише?',
+    title: `Шаг 8 из ${STEP_TITLES_TOTAL}. Контраст комментариев`,
+    hint: 'Комментарии должны быть заметнее или тише? Смотрите на строки, начинающиеся с //.',
     highlight: 'com',
-    make: (s) => [-14, -5, 5, 14].map((d) => {
+    make: (s) => [-28, -12, 12, 28].map((d) => {
       const c = cloneState(s);
       c.lcAdjust.com = (c.lcAdjust.com || 0) + d;
       return c;
     }),
   },
   {
-    title: `Шаг 10 из ${STEP_TITLES_TOTAL}. Контраст свойств объектов`,
-    hint: 'api.get, res.data — насколько они должны выделяться?',
+    title: `Шаг 9 из ${STEP_TITLES_TOTAL}. Контраст свойств объектов`,
+    hint: 'api.get, res.data — насколько они должны выделяться на фоне переменных?',
     highlight: 'prp',
-    make: (s) => [-12, -4, 4, 12].map((d) => {
+    make: (s) => [-26, -10, 10, 26].map((d) => {
       const c = cloneState(s);
       c.lcAdjust.prp = (c.lcAdjust.prp || 0) + d;
       return c;
     }),
   },
   {
-    title: `Шаг 11 из ${STEP_TITLES_TOTAL}. Строки и числа`,
-    hint: 'Какой баланс контраста между строками и числами удобнее?',
-    highlight: 'num',
+    title: `Шаг 10 из ${STEP_TITLES_TOTAL}. Строки и числа`,
+    hint: 'Какой баланс между строками и числами удобнее?',
+    highlight: ['str', 'num'],
     make: (s) => [
-      { str: -10, num:  10 },
-      { str:  -3, num:   3 },
-      { str:   3, num:  -3 },
-      { str:  10, num: -10 },
+      { str: -20, num:  20 },
+      { str:  -7, num:   7 },
+      { str:   7, num:  -7 },
+      { str:  20, num: -20 },
     ].map((p) => {
       const c = cloneState(s);
       c.lcAdjust.str = (c.lcAdjust.str || 0) + p.str;
@@ -670,7 +409,7 @@ const STEPS = [
     }),
   },
   {
-    title: `Шаг 12 из ${STEP_TITLES_TOTAL}. Финальная полировка`,
+    title: `Шаг 11 из ${STEP_TITLES_TOTAL}. Финальная полировка`,
     hint: 'Совсем небольшая разница в фоне.',
     highlight: null,
     make: (s) => [-0.018, -0.006, 0.006, 0.018].map((d) => {
@@ -1210,9 +949,8 @@ function sendRender() {
       letter: 'ABCD'[idx],
       bg: v.bg,
       fg: v.fg,
-      accentBg: v.accentBg,
-      accentFg: v.ui['statusBar.foreground'] || v.fg,
       preview: buildPreviewHtml(v, stepDef.highlight),
+      isCurrent: calib.step === 1 && idx === 0,
     };
   });
 
@@ -1321,25 +1059,34 @@ async function promptSaveAfterCalibration() {
 
 async function applyVariant(variant) {
   try {
-    const allColors = Object.assign({}, variant.ui, {
-      'editor.background': variant.bg,
-      'editor.foreground': variant.fg,
-      'editorError.foreground': variant.err,
-    });
+    const editorColors = {
+      'editor.background':                    variant.bg,
+      'editor.foreground':                    variant.fg,
+      'editorCursor.foreground':              variant.cursor,
+      'editorLineNumber.foreground':          variant.lineNum,
+      'editorLineNumber.activeForeground':    variant.lineNumActive,
+      'editor.selectionBackground':           variant.selection,
+      'editor.selectionHighlightBackground':  variant.selectionHighlight,
+      'editor.lineHighlightBackground':       variant.lineHighlight,
+      'editorBracketMatch.background':        variant.bracketMatch,
+      'editorWhitespace.foreground':          variant.whitespace,
+      'editorIndentGuide.background1':        variant.indent,
+      'editorIndentGuide.activeBackground1':  variant.indentActive,
+      'editorError.foreground':               variant.err,
+      'editorWarning.foreground':             variant.warn,
+    };
 
-    // Страховка: отбрасываем всё, что не похоже на HEX-цвет
-    for (const key of Object.keys(allColors)) {
-      const val = allColors[key];
-      if (typeof val !== 'string' || !val.match(/^(#[0-9a-fA-F]{6}|transparent)$/)) {
+    for (const key of Object.keys(editorColors)) {
+      const val = editorColors[key];
+      if (typeof val !== 'string' || !val.match(/^(#[0-9a-fA-F]{6})$/)) {
         console.error('Calibra: некорректное значение для', key, '=', val);
-        delete allColors[key];
+        delete editorColors[key];
       }
     }
 
     const wbConfig = vscode.workspace.getConfiguration('workbench');
     const currentWb = wbConfig.get('colorCustomizations') || {};
-
-    const nextWb = Object.assign({}, currentWb, allColors);
+    const nextWb = Object.assign({}, currentWb, editorColors);
 
     await wbConfig.update(
       'colorCustomizations',
@@ -1404,66 +1151,177 @@ async function applyVariant(variant) {
 //  БЛОК 14. Превью кода
 // ═════════════════════════════════════════════════════════════
 
+function isHighlighted(key, highlight) {
+  if (!key || !highlight) return false;
+  if (Array.isArray(highlight)) return highlight.indexOf(key) >= 0;
+  return key === highlight;
+}
+
 function hl(text, color, key, highlight) {
   const base = `<span style="color:${color}">${text}</span>`;
-  if (key && key === highlight) {
-    return `<span style="outline:1px dashed rgba(128,128,128,0.5); outline-offset:2px; border-radius:2px;">${base}</span>`;
+  if (isHighlighted(key, highlight)) {
+    return `<span style="background:rgba(255,180,80,0.20);outline:1.5px solid rgba(255,180,80,0.75);outline-offset:1px;border-radius:3px;padding:0 2px;">${base}</span>`;
   }
   return base;
 }
 
 function buildPreviewHtml(v, highlight) {
-  highlight = highlight || null;
+  if (highlight) return buildFocusedPreview(v, highlight);
+  return buildFullPreview(v);
+}
 
-  const lines = [
-    hl('// fetch user with caching', v.com, 'com', highlight),
+// Полное превью — для шагов про фон (1–6, 11)
+function buildFullPreview(v) {
+  const h = null;
+  return [
+    hl('// fetch user with caching', v.com, 'com', h),
+    '',
+    hl('export async function', v.kw, 'kw', h) + ' ' +
+      hl('fetchUser', v.fn, 'fn', h) + '&lt;' +
+      hl('T', v.typ, 'typ', h) + '&gt;(' +
+      hl('id', v.fg, 'fg', h) + ': ' +
+      hl('number', v.typ, 'typ', h) + ') {',
 
-    hl('export async function', v.kw, 'kw', highlight) + ' ' +
-      hl('fetchUser', v.fn, 'fn', highlight) + '&lt;' +
-      hl('T', v.typ, 'typ', highlight) + '&gt;(',
+    '  ' + hl('const', v.kw, 'kw', h) + ' maxRetries = ' +
+      hl('3', v.num, 'num', h) + ';',
 
-    '  ' + hl('id', v.fg, 'fg', highlight) + ': ' +
-      hl('number', v.typ, 'typ', highlight) + ',',
+    '  ' + hl('const', v.kw, 'kw', h) + ' enabled = ' +
+      hl('true', v.con, 'con', h) + ';',
 
-    '  opts: ' + hl('Options', v.typ, 'typ', highlight) + ' = {}',
+    '  ' + hl('if', v.kw, 'kw', h) + ' (!id || id &gt; ' +
+      hl('1000', v.num, 'num', h) + ') ' +
+      hl('return', v.kw, 'kw', h) + ' ' +
+      hl('null', v.con, 'con', h) + ';',
 
-    '): ' + hl('Promise', v.typ, 'typ', highlight) + '&lt;' +
-      hl('User', v.typ, 'typ', highlight) + '&gt; {',
+    '  ' + hl('const', v.kw, 'kw', h) + ' key = ' +
+      hl("'user:'", v.str, 'str', h) + ' + id;',
 
-    '  ' + hl('const', v.kw, 'kw', highlight) + ' maxRetries = ' +
-      hl('3', v.num, 'num', highlight) + ';',
+    '  ' + hl('const', v.kw, 'kw', h) + ' cached = ' +
+      hl('store', v.fg, 'fg', h) + '.' +
+      hl('get', v.prp, 'prp', h) + '(key);',
 
-    '  ' + hl('const', v.kw, 'kw', highlight) + ' enabled = ' +
-      hl('true', v.con, 'con', highlight) + ';',
+    '  ' + hl('const', v.kw, 'kw', h) + ' res = ' +
+      hl('await', v.kw, 'kw', h) + ' ' +
+      hl('api', v.fg, 'fg', h) + '.' +
+      hl('get', v.prp, 'prp', h) + '(' +
+      hl("'/user/'", v.str, 'str', h) + ');',
 
-    '  ' + hl('if', v.kw, 'kw', highlight) + ' (!id || id &gt; ' +
-      hl('1000', v.num, 'num', highlight) + ') ' +
-      hl('return', v.kw, 'kw', highlight) + ' ' +
-      hl('null', v.con, 'con', highlight) + ';',
-
-    '  ' + hl('const', v.kw, 'kw', highlight) + ' cacheKey = ' +
-      hl("'user:'", v.str, 'str', highlight) + ' + id;',
-
-    '  ' + hl('const', v.kw, 'kw', highlight) + ' cached = ' +
-      hl('store', v.fg, 'fg', highlight) + '.' +
-      hl('get', v.prp, 'prp', highlight) + '(cacheKey);',
-
-    '  ' + hl('if', v.kw, 'kw', highlight) + ' (cached) ' +
-      hl('return', v.kw, 'kw', highlight) + ' cached;',
-
-    '  ' + hl('const', v.kw, 'kw', highlight) + ' res = ' +
-      hl('await', v.kw, 'kw', highlight) + ' ' +
-      hl('api', v.fg, 'fg', highlight) + '.' +
-      hl('get', v.prp, 'prp', highlight) + '(' +
-      hl("'/user/'", v.str, 'str', highlight) + ' + id);',
-
-    '  ' + hl('return', v.kw, 'kw', highlight) + ' res.' +
-      hl('data', v.prp, 'prp', highlight) + ';',
+    '  ' + hl('return', v.kw, 'kw', h) + ' res.' +
+      hl('data', v.prp, 'prp', h) + ';',
 
     '}',
-  ];
+  ].join('\n');
+}
 
-  return lines.join('\n');
+// Фокусированное превью — для шагов контраста (7–10)
+function buildFocusedPreview(v, highlight) {
+  if (highlight === 'com') {
+    // Комментарии. Четыре строки подряд, чтобы сравнение было мгновенным.
+    return [
+      hl('// fetch user with caching', v.com, 'com', highlight),
+      hl('// returns null when id is invalid', v.com, 'com', highlight),
+      hl('// retries up to 3 times on failure', v.com, 'com', highlight),
+      hl('// throws NetworkError on timeout', v.com, 'com', highlight),
+      '',
+      hl('const', v.kw, 'kw', highlight) + ' user = ' +
+        hl('await', v.kw, 'kw', highlight) + ' ' +
+        hl('fetchUser', v.fn, 'fn', highlight) + '(id);',
+    ].join('\n');
+  }
+
+  if (highlight === 'fg') {
+    // Основной текст. Переменные доминируют, всё остальное — служебное.
+    return [
+      hl('const', v.kw, 'kw', highlight) + ' ' +
+        hl('user', v.fg, 'fg', highlight) + ' = ' +
+        hl('await', v.kw, 'kw', highlight) + ' ' +
+        hl('fetchUser', v.fn, 'fn', highlight) + '(' +
+        hl('id', v.fg, 'fg', highlight) + ');',
+      '',
+      hl('const', v.kw, 'kw', highlight) + ' ' +
+        hl('name', v.fg, 'fg', highlight) + ' = ' +
+        hl('user', v.fg, 'fg', highlight) + '.' +
+        hl('profile', v.prp, 'prp', highlight) + '.' +
+        hl('name', v.prp, 'prp', highlight) + ';',
+
+      hl('const', v.kw, 'kw', highlight) + ' ' +
+        hl('email', v.fg, 'fg', highlight) + ' = ' +
+        hl('user', v.fg, 'fg', highlight) + '.' +
+        hl('profile', v.prp, 'prp', highlight) + '.' +
+        hl('email', v.prp, 'prp', highlight) + ';',
+      '',
+      hl('console', v.fg, 'fg', highlight) + '.' +
+        hl('log', v.prp, 'prp', highlight) + '(' +
+        hl('name', v.fg, 'fg', highlight) + ', ' +
+        hl('email', v.fg, 'fg', highlight) + ');',
+      '',
+      hl('return', v.kw, 'kw', highlight) + ' ' +
+        hl('user', v.fg, 'fg', highlight) + ';',
+    ].join('\n');
+  }
+
+  if (highlight === 'prp') {
+    // Свойства объектов. Каждая строка содержит минимум одно свойство.
+    return [
+      hl('const', v.kw, 'kw', highlight) + ' cached = ' +
+        hl('store', v.fg, 'fg', highlight) + '.' +
+        hl('get', v.prp, 'prp', highlight) + '(key);',
+      '',
+      hl('const', v.kw, 'kw', highlight) + ' name = ' +
+        hl('user', v.fg, 'fg', highlight) + '.' +
+        hl('profile', v.prp, 'prp', highlight) + '.' +
+        hl('name', v.prp, 'prp', highlight) + ';',
+
+      hl('const', v.kw, 'kw', highlight) + ' email = ' +
+        hl('user', v.fg, 'fg', highlight) + '.' +
+        hl('profile', v.prp, 'prp', highlight) + '.' +
+        hl('email', v.prp, 'prp', highlight) + ';',
+      '',
+      hl('const', v.kw, 'kw', highlight) + ' res = ' +
+        hl('await', v.kw, 'kw', highlight) + ' ' +
+        hl('api', v.fg, 'fg', highlight) + '.' +
+        hl('get', v.prp, 'prp', highlight) + '(' +
+        hl("'/user/'", v.str, 'str', highlight) + ');',
+      '',
+      hl('return', v.kw, 'kw', highlight) + ' res.' +
+        hl('data', v.prp, 'prp', highlight) + ';',
+    ].join('\n');
+  }
+
+  if (Array.isArray(highlight) &&
+      highlight.indexOf('str') >= 0 &&
+      highlight.indexOf('num') >= 0) {
+    // Строки и числа. Оба типа в одном фрагменте.
+    return [
+      hl('const', v.kw, 'kw', highlight) + ' key = ' +
+        hl("'user:'", v.str, 'str', highlight) + ' + id;',
+
+      hl('const', v.kw, 'kw', highlight) + ' maxRetries = ' +
+        hl('3', v.num, 'num', highlight) + ';',
+
+      hl('const', v.kw, 'kw', highlight) + ' timeout = ' +
+        hl('5000', v.num, 'num', highlight) + ';',
+
+      hl('const', v.kw, 'kw', highlight) + ' path = ' +
+        hl("'/api/users'", v.str, 'str', highlight) + ';',
+      '',
+      hl('if', v.kw, 'kw', highlight) + ' (id &gt; ' +
+        hl('1000', v.num, 'num', highlight) + ') ' +
+        hl('return', v.kw, 'kw', highlight) + ' ' +
+        hl('null', v.con, 'con', highlight) + ';',
+      '',
+      hl('const', v.kw, 'kw', highlight) + ' page = ' +
+        hl('2', v.num, 'num', highlight) + ';',
+
+      hl('const', v.kw, 'kw', highlight) + ' size = ' +
+        hl('50', v.num, 'num', highlight) + ';',
+
+      hl('const', v.kw, 'kw', highlight) + ' tag = ' +
+        hl("'active'", v.str, 'str', highlight) + ';',
+    ].join('\n');
+  }
+
+  return buildFullPreview(v);
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -1495,6 +1353,7 @@ function getHtml() {
       font-size: 13px;
       opacity: 0.7;
       margin: 0 0 10px 0;
+      line-height: 1.4;
     }
     .active {
       font-size: 12px;
@@ -1516,11 +1375,13 @@ function getHtml() {
       width: 0%;
       transition: width 0.25s ease;
     }
+
     .grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 16px;
     }
+
     .card {
       border: 1px solid rgba(128, 128, 128, 0.25);
       border-radius: 6px;
@@ -1532,34 +1393,34 @@ function getHtml() {
       border-color: var(--vscode-focusBorder);
       transform: translateY(-1px);
     }
+
     .preview {
       font-family: var(--vscode-editor-font-family);
-      font-size: 11.5px;
-      line-height: 1.5;
-      padding: 14px;
+      font-size: 13px;
+      line-height: 1.65;
+      padding: 16px;
       white-space: pre;
       tab-size: 2;
       overflow: auto;
+      min-height: 130px;
     }
-    .chrome {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 3px 10px;
-      font-size: 10px;
-      font-family: var(--vscode-font-family);
-      letter-spacing: 0.03em;
-    }
-    .chrome .left { opacity: 0.9; }
-    .chrome .right { opacity: 0.75; }
+
     .label {
       font-size: 12px;
       text-align: center;
-      padding: 6px;
+      padding: 5px;
       background: rgba(128, 128, 128, 0.08);
       opacity: 0.8;
       letter-spacing: 0.05em;
     }
+    .label.current {
+      background: var(--vscode-focusBorder);
+      color: var(--vscode-button-foreground);
+      opacity: 1;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+    }
+
     .footer {
       margin-top: 20px;
       display: flex;
@@ -1608,10 +1469,10 @@ function getHtml() {
     function renderCards(cards) {
       grid.innerHTML = '';
       cards.forEach(function (c) {
-        var el = document.createElement('div');
-        el.className = 'card';
-        el.setAttribute('data-letter', c.letter);
-        el.addEventListener('click', function () {
+        var card = document.createElement('div');
+        card.className = 'card';
+        card.setAttribute('data-letter', c.letter);
+        card.addEventListener('click', function () {
           vscode.postMessage({ command: 'select', letter: c.letter });
         });
 
@@ -1621,22 +1482,18 @@ function getHtml() {
         preview.style.color = c.fg;
         preview.innerHTML = c.preview;
 
-        var chrome = document.createElement('div');
-        chrome.className = 'chrome';
-        chrome.style.background = c.accentBg;
-        chrome.style.color = c.accentFg;
-        chrome.innerHTML =
-          '<span class="left">Calibra · main</span>' +
-          '<span class="right">UTF-8 · TS</span>';
-
         var label = document.createElement('div');
         label.className = 'label';
-        label.textContent = 'Вариант ' + c.letter;
+        if (c.isCurrent) {
+          label.textContent = 'Вариант ' + c.letter + ' · текущая';
+          label.classList.add('current');
+        } else {
+          label.textContent = 'Вариант ' + c.letter;
+        }
 
-        el.appendChild(preview);
-        el.appendChild(chrome);
-        el.appendChild(label);
-        grid.appendChild(el);
+        card.appendChild(preview);
+        card.appendChild(label);
+        grid.appendChild(card);
       });
     }
 
