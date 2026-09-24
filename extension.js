@@ -279,25 +279,53 @@ function deriveAnsi(bg) {
 function deriveUI(bg, accent) {
   const accentHex = oklabToHex(accent);
 
-  const surface = (dL) => oklabToHex({
+  // ─── Две разные функции плоскостей ─────────────────────
+  //
+  //  chromeSurface — для "обвязки" интерфейса: sidebar, activity bar,
+  //  панель, вкладки, поля ввода. Всегда идут в одну сторону от
+  //  редактора к краям, независимо от полярности темы. На тёмной
+  //  теме — темнее, на светлой — тоже темнее. Это то, что делает
+  //  chrome видимым как отдельный слой.
+  //
+  //  overlaySurface — для элементов, которые лежат "поверх"
+  //  основного фона: виджеты, selection, hover, скроллбар.
+  //  Направление зависит от полярности: на тёмной — светлее,
+  //  на светлой — темнее. Иначе на светлых темах они сливаются
+  //  с фоном и становятся невидимыми.
+
+  const chromeSurface = (dL) => oklabToHex({
     L: clamp(bg.L + dL, 0.02, 0.98),
     a: bg.a + accent.a * 0.02,
     b: bg.b + accent.b * 0.02,
   });
+
+  const overlaySurface = (magnitude) => {
+    const dir = bg.L > 0.5 ? -1 : 1;
+    return oklabToHex({
+      L: clamp(bg.L + dir * magnitude, 0.02, 0.98),
+      a: bg.a + accent.a * 0.02,
+      b: bg.b + accent.b * 0.02,
+    });
+  };
 
   const textOn = (surfaceHex, lc) => {
     const sOklab = hexToOklab(surfaceHex);
     return solveTextForLc(sOklab, lc, bg.a * 0.1, bg.b * 0.1);
   };
 
-  const sideBarBg      = surface(-0.015);
-  const activityBarBg  = surface(-0.06);
-  const panelBg        = surface(-0.02);
-  const tabInactiveBg  = surface(-0.025);
-  const inputBg        = surface(-0.04);
-  const dropdownBg     = surface(-0.03);
-  const widgetBg       = surface(0.03);
-  const selectionBg    = surface(0.06);
+  // Chrome-плоскости
+  const sideBarBg      = chromeSurface(-0.02);
+  const activityBarBg  = chromeSurface(-0.08);
+  const panelBg        = chromeSurface(-0.025);
+  const tabInactiveBg  = chromeSurface(-0.03);
+  const inputBg        = chromeSurface(-0.04);
+  const dropdownBg     = chromeSurface(-0.03);
+  const sideBarHeaderBg = chromeSurface(-0.04);
+  const activityActiveBg = chromeSurface(-0.03);
+
+  // Overlay-плоскости
+  const widgetBg       = overlaySurface(0.03);
+  const selectionBg    = overlaySurface(0.06);
 
   const ansi = deriveAnsi(bg);
 
@@ -313,121 +341,136 @@ function deriveUI(bg, accent) {
   const onAccent        = textOn(accentHex, 80);
 
   return {
+    // ─── Редактор ─────────────────────────────────────────
     'editorLineNumber.foreground':        textOn(oklabToHex(bg), 38),
     'editorLineNumber.activeForeground':  textOn(oklabToHex(bg), 60),
     'editorCursor.foreground':            accentHex,
     'editor.selectionBackground':         selectionBg,
-    'editor.selectionHighlightBackground': surface(0.04),
-    'editor.lineHighlightBackground':     surface(0.02),
+    'editor.selectionHighlightBackground': overlaySurface(0.04),
+    'editor.lineHighlightBackground':     overlaySurface(0.02),
     'editorWhitespace.foreground':        textOn(oklabToHex(bg), 22),
     'editorIndentGuide.background1':      textOn(oklabToHex(bg), 18),
     'editorIndentGuide.activeBackground1': textOn(oklabToHex(bg), 38),
-    'editorOverviewRuler.border':         surface(0.04),
+    'editorOverviewRuler.border':         chromeSurface(0.04),
     'editorGutter.background':            oklabToHex(bg),
-    'editorBracketMatch.background':      surface(0.05),
+    'editorBracketMatch.background':      overlaySurface(0.05),
     'editorBracketMatch.border':          accentHex,
 
+    // ─── Sidebar ──────────────────────────────────────────
     'sideBar.background':             sideBarBg,
     'sideBar.foreground':             sideBarFg,
-    'sideBar.border':                 surface(0.02),
-    'sideBarSectionHeader.background': surface(-0.04),
-    'sideBarSectionHeader.foreground': textOn(surface(-0.04), 65),
+    'sideBar.border':                 chromeSurface(0.02),
+    'sideBarSectionHeader.background': sideBarHeaderBg,
+    'sideBarSectionHeader.foreground': textOn(sideBarHeaderBg, 65),
 
+    // ─── Activity bar ─────────────────────────────────────
     'activityBar.background':            activityBarBg,
     'activityBar.foreground':            activityBarFg,
     'activityBar.inactiveForeground':    textOn(activityBarBg, 40),
     'activityBar.activeBorder':          accentHex,
-    'activityBar.activeBackground':      surface(-0.03),
-    'activityBar.border':                surface(0.02),
+    'activityBar.activeBackground':      activityActiveBg,
+    'activityBar.border':                chromeSurface(0.02),
     'activityBarBadge.background':       accentHex,
     'activityBarBadge.foreground':       onAccent,
 
+    // ─── Status bar ───────────────────────────────────────
     'statusBar.background':              accentHex,
     'statusBar.foreground':              onAccent,
-    'statusBar.border':                  surface(0.03),
+    'statusBar.border':                  chromeSurface(0.03),
     'statusBarItem.hoverBackground':     oklabToHex({
       L: clamp(accent.L + 0.06, 0.02, 0.98), a: accent.a, b: accent.b,
     }),
     'statusBarItem.remoteBackground':    accentHex,
     'statusBarItem.remoteForeground':    onAccent,
 
+    // ─── Title bar ────────────────────────────────────────
     'titleBar.activeBackground':   activityBarBg,
     'titleBar.activeForeground':   activityBarFg,
     'titleBar.inactiveBackground': activityBarBg,
     'titleBar.inactiveForeground': textOn(activityBarBg, 40),
-    'titleBar.border':             surface(0.02),
+    'titleBar.border':             chromeSurface(0.02),
 
+    // ─── Вкладки ──────────────────────────────────────────
     'tab.activeBackground':              oklabToHex(bg),
     'tab.activeForeground':              textOn(oklabToHex(bg), 80),
     'tab.inactiveBackground':            tabInactiveBg,
     'tab.inactiveForeground':            tabInactiveFg,
-    'tab.border':                        surface(0.02),
+    'tab.border':                        chromeSurface(0.02),
     'tab.activeBorderTop':               accentHex,
-    'tab.unfocusedActiveBorderTop':      surface(0.05),
+    'tab.unfocusedActiveBorderTop':      overlaySurface(0.05),
     'editorGroupHeader.tabsBackground':  tabInactiveBg,
-    'editorGroupHeader.tabsBorder':      surface(0.02),
+    'editorGroupHeader.tabsBorder':      chromeSurface(0.02),
     'editorGroupHeader.noTabsBackground': tabInactiveBg,
-    'editorGroup.border':                surface(0.04),
+    'editorGroup.border':                chromeSurface(0.04),
 
+    // ─── Панель и терминал ────────────────────────────────
     'panel.background':             panelBg,
     'panel.foreground':             panelFg,
-    'panel.border':                 surface(0.03),
+    'panel.border':                 chromeSurface(0.03),
     'panelTitle.activeForeground':  textOn(panelBg, 80),
     'panelTitle.inactiveForeground': textOn(panelBg, 55),
     'panelTitle.activeBorder':      accentHex,
     'terminal.background':          panelBg,
     'terminal.foreground':          panelFg,
     'terminalCursor.foreground':    accentHex,
-    'terminal.selectionBackground': surface(0.06),
-    'terminal.border':              surface(0.03),
+    'terminal.selectionBackground': overlaySurface(0.06),
+    'terminal.border':              chromeSurface(0.03),
 
+    // ─── Поля ввода, выпадашки, кнопки ────────────────────
     'input.background':               inputBg,
     'input.foreground':               inputFg,
-    'input.border':                   surface(0.05),
+    'input.border':                   chromeSurface(0.05),
     'input.placeholderForeground':    textOn(inputBg, 45),
     'inputOption.activeBackground':   accentHex,
     'inputOption.activeForeground':   onAccent,
     'dropdown.background':            dropdownBg,
     'dropdown.foreground':            dropdownFg,
-    'dropdown.border':                surface(0.05),
+    'dropdown.border':                chromeSurface(0.05),
     'button.background':              accentHex,
     'button.foreground':              onAccent,
     'button.hoverBackground':         oklabToHex({
       L: clamp(accent.L + 0.06, 0.02, 0.98), a: accent.a, b: accent.b,
     }),
-    'button.secondaryBackground':     surface(0.06),
-    'button.secondaryForeground':     textOn(surface(0.06), 80),
-    'button.secondaryHoverBackground': surface(0.09),
+    'button.secondaryBackground':     overlaySurface(0.06),
+    'button.secondaryForeground':     textOn(overlaySurface(0.06), 80),
+    'button.secondaryHoverBackground': overlaySurface(0.09),
 
+    // ─── Фокус и списки ───────────────────────────────────
     'focusBorder':                        accentHex,
     'list.activeSelectionBackground':     selectionBg,
     'list.activeSelectionForeground':     selectionFg,
-    'list.inactiveSelectionBackground':   surface(0.03),
-    'list.hoverBackground':               surface(0.04),
+    'list.inactiveSelectionBackground':   overlaySurface(0.03),
+    'list.hoverBackground':               overlaySurface(0.04),
     'list.focusOutline':                  accentHex,
     'list.highlightForeground':           accentHex,
 
+    // ─── Бейджи ───────────────────────────────────────────
     'badge.background': accentHex,
     'badge.foreground': onAccent,
 
+    // ─── Скроллбар ────────────────────────────────────────
     'scrollbar.shadow':                    'transparent',
-    'scrollbarSlider.background':          surface(0.10),
-    'scrollbarSlider.hoverBackground':     surface(0.14),
-    'scrollbarSlider.activeBackground':    surface(0.18),
+    'scrollbarSlider.background':          overlaySurface(0.10),
+    'scrollbarSlider.hoverBackground':     overlaySurface(0.14),
+    'scrollbarSlider.activeBackground':    overlaySurface(0.18),
 
+    // ─── Minimap ──────────────────────────────────────────
     'minimap.background':           oklabToHex(bg),
-    'minimap.selectionHighlight':   surface(0.10),
+    'minimap.selectionHighlight':   overlaySurface(0.10),
 
+    // ─── Виджеты редактора ────────────────────────────────
     'editorWidget.background':                  widgetBg,
     'editorWidget.foreground':                  widgetFg,
-    'editorWidget.border':                      surface(0.06),
+    'editorWidget.border':                      chromeSurface(0.06),
     'editorSuggestWidget.background':           widgetBg,
     'editorSuggestWidget.foreground':           widgetFg,
-    'editorSuggestWidget.selectedBackground':   surface(0.06),
+    'editorSuggestWidget.selectedBackground':   overlaySurface(0.06),
 
+    // ─── Уведомления ──────────────────────────────────────
     'notifications.background': widgetBg,
     'notifications.foreground': widgetFg,
 
+    // ─── ANSI-палитра терминала ───────────────────────────
     'terminal.ansiBlack':         ansi.black,
     'terminal.ansiRed':           ansi.red,
     'terminal.ansiGreen':         ansi.green,
@@ -485,31 +528,44 @@ function stateToVariant(state) {
   );
 }
 
-const STEP_TITLES_TOTAL = 11;
+const STEP_TITLES_TOTAL = 12;
 
 const STEPS = [
   {
-    title: `Шаг 1 из ${STEP_TITLES_TOTAL}. Яркость фона`,
-    hint: 'Какой уровень освещения вам комфортнее?',
+    title: `Шаг 1 из ${STEP_TITLES_TOTAL}. Тип темы`,
+    hint: 'Тёмная, светлая или что-то между? Выбирайте то, что ближе к вашему привычному ощущению.',
     highlight: null,
-    make: (s) => [-0.16, -0.06, 0.06, 0.16].map((d) => {
+    make: (s) => {
+      const targets = [0.10, 0.28, 0.72, 0.92];
+      return targets.map((targetL) => {
+        const c = cloneState(s);
+        c.bg.L = targetL;
+        return c;
+      });
+    },
+  },
+  {
+    title: `Шаг 2 из ${STEP_TITLES_TOTAL}. Яркость фона`,
+    hint: 'Уточните уровень освещения — теперь в выбранной полярности.',
+    highlight: null,
+    make: (s) => [-0.06, -0.02, 0.02, 0.06].map((d) => {
       const c = cloneState(s);
-      c.bg.L = clamp(c.bg.L + d, 0.06, 0.94);
+      c.bg.L = clamp(c.bg.L + d, 0.04, 0.96);
       return c;
     }),
   },
   {
-    title: `Шаг 2 из ${STEP_TITLES_TOTAL}. Яркость фона (уточнение)`,
-    hint: 'Теперь — совсем небольшая разница.',
+    title: `Шаг 3 из ${STEP_TITLES_TOTAL}. Яркость фона (уточнение)`,
+    hint: 'Совсем небольшая разница.',
     highlight: null,
-    make: (s) => [-0.045, -0.015, 0.015, 0.045].map((d) => {
+    make: (s) => [-0.020, -0.007, 0.007, 0.020].map((d) => {
       const c = cloneState(s);
-      c.bg.L = clamp(c.bg.L + d, 0.06, 0.94);
+      c.bg.L = clamp(c.bg.L + d, 0.04, 0.96);
       return c;
     }),
   },
   {
-    title: `Шаг 3 из ${STEP_TITLES_TOTAL}. Оттенок фона`,
+    title: `Шаг 4 из ${STEP_TITLES_TOTAL}. Оттенок фона`,
     hint: 'Тёплый, холодный или нейтральный?',
     highlight: null,
     make: (s) => [
@@ -525,7 +581,7 @@ const STEPS = [
     }),
   },
   {
-    title: `Шаг 4 из ${STEP_TITLES_TOTAL}. Оттенок фона (уточнение)`,
+    title: `Шаг 5 из ${STEP_TITLES_TOTAL}. Оттенок фона (уточнение)`,
     hint: 'Едва заметные сдвиги оттенка.',
     highlight: null,
     make: (s) => [
@@ -541,7 +597,7 @@ const STEPS = [
     }),
   },
   {
-    title: `Шаг 5 из ${STEP_TITLES_TOTAL}. Насыщенность фона`,
+    title: `Шаг 6 из ${STEP_TITLES_TOTAL}. Насыщенность фона`,
     hint: 'Насколько выраженным должен быть оттенок?',
     highlight: null,
     make: (s) => [0.4, 0.8, 1.1, 1.4].map((k) => {
@@ -552,7 +608,7 @@ const STEPS = [
     }),
   },
   {
-    title: `Шаг 6 из ${STEP_TITLES_TOTAL}. Акцентный цвет`,
+    title: `Шаг 7 из ${STEP_TITLES_TOTAL}. Акцентный цвет`,
     hint: 'Цвет кнопок, фокуса, статус-бара и активных элементов.',
     highlight: null,
     make: (s) => [
@@ -568,7 +624,7 @@ const STEPS = [
     }),
   },
   {
-    title: `Шаг 7 из ${STEP_TITLES_TOTAL}. Контраст основного текста`,
+    title: `Шаг 8 из ${STEP_TITLES_TOTAL}. Контраст основного текста`,
     hint: 'Насколько ярким должен быть обычный код?',
     highlight: 'fg',
     make: (s) => [-14, -5, 5, 14].map((d) => {
@@ -578,7 +634,7 @@ const STEPS = [
     }),
   },
   {
-    title: `Шаг 8 из ${STEP_TITLES_TOTAL}. Контраст комментариев`,
+    title: `Шаг 9 из ${STEP_TITLES_TOTAL}. Контраст комментариев`,
     hint: 'Комментарии должны быть заметнее или тише?',
     highlight: 'com',
     make: (s) => [-14, -5, 5, 14].map((d) => {
@@ -588,7 +644,7 @@ const STEPS = [
     }),
   },
   {
-    title: `Шаг 9 из ${STEP_TITLES_TOTAL}. Контраст свойств объектов`,
+    title: `Шаг 10 из ${STEP_TITLES_TOTAL}. Контраст свойств объектов`,
     hint: 'api.get, res.data — насколько они должны выделяться?',
     highlight: 'prp',
     make: (s) => [-12, -4, 4, 12].map((d) => {
@@ -598,7 +654,7 @@ const STEPS = [
     }),
   },
   {
-    title: `Шаг 10 из ${STEP_TITLES_TOTAL}. Строки и числа`,
+    title: `Шаг 11 из ${STEP_TITLES_TOTAL}. Строки и числа`,
     hint: 'Какой баланс контраста между строками и числами удобнее?',
     highlight: 'num',
     make: (s) => [
@@ -614,12 +670,12 @@ const STEPS = [
     }),
   },
   {
-    title: `Шаг 11 из ${STEP_TITLES_TOTAL}. Финальная полировка`,
+    title: `Шаг 12 из ${STEP_TITLES_TOTAL}. Финальная полировка`,
     hint: 'Совсем небольшая разница в фоне.',
     highlight: null,
     make: (s) => [-0.018, -0.006, 0.006, 0.018].map((d) => {
       const c = cloneState(s);
-      c.bg.L = clamp(c.bg.L + d, 0.06, 0.94);
+      c.bg.L = clamp(c.bg.L + d, 0.04, 0.96);
       return c;
     }),
   },
@@ -985,6 +1041,7 @@ async function importProfileFlow() {
 let extensionContext = null;
 let calib = null;
 let sessionSnapshot = null;
+let isApplying = false;
 
 function activate(context) {
   extensionContext = context;
@@ -1039,6 +1096,35 @@ function activate(context) {
   register('calibra.export', exportProfileFlow);
   register('calibra.import', importProfileFlow);
   register('calibra.showActive', showActiveProfileFlow);
+
+  register('calibra.purge', async () => {
+    const answer = await vscode.window.showWarningMessage(
+      'Полностью очистить настройки Calibra? Это удалит colorCustomizations и tokenColorCustomizations из глобальных настроек. Ваши профили сохранятся.',
+      { modal: true },
+      'Очистить'
+    );
+    if (answer !== 'Очистить') return;
+
+    await vscode.workspace.getConfiguration('workbench').update(
+      'colorCustomizations',
+      undefined,
+      vscode.ConfigurationTarget.Global
+    );
+    await vscode.workspace.getConfiguration('editor').update(
+      'tokenColorCustomizations',
+      undefined,
+      vscode.ConfigurationTarget.Global
+    );
+
+    await extensionContext.globalState.update(CALIB_KEY, undefined);
+    await extensionContext.globalState.update(ACTIVE_KEY, null);
+
+    sessionSnapshot = null;
+
+    vscode.window.showInformationMessage(
+      'Calibra: все кастомизации удалены. Переключение тем VS Code снова работает как обычно.'
+    );
+  });
 
   register('calibra.forgetAll', async () => {
     const answer = await vscode.window.showWarningMessage(
@@ -1144,29 +1230,35 @@ function sendRender() {
 
 async function handleSelect(letter) {
   if (!calib) return;
+  if (isApplying) return;
 
   const idx = 'ABCD'.indexOf(letter);
   if (idx < 0 || idx >= calib.candidates.length) return;
 
-  const chosenState = calib.candidates[idx];
-  const chosenVariant = stateToVariant(chosenState);
+  isApplying = true;
+  try {
+    const chosenState = calib.candidates[idx];
+    const chosenVariant = stateToVariant(chosenState);
 
-  await applyVariant(chosenVariant);
+    await applyVariant(chosenVariant);
 
-  const nextStep = calib.step + 1;
-  if (nextStep > STEPS.length) {
+    const nextStep = calib.step + 1;
+    if (nextStep > STEPS.length) {
+      calib.state = chosenState;
+      await saveCalibrationState();
+      await finishCalibration();
+      return;
+    }
+
     calib.state = chosenState;
+    calib.step = nextStep;
+    calib.candidates = STEPS[nextStep - 1].make(chosenState);
+
     await saveCalibrationState();
-    await finishCalibration();
-    return;
+    sendRender();
+  } finally {
+    isApplying = false;
   }
-
-  calib.state = chosenState;
-  calib.step = nextStep;
-  calib.candidates = STEPS[nextStep - 1].make(chosenState);
-
-  await saveCalibrationState();
-  sendRender();
 }
 
 async function saveCalibrationState() {
@@ -1228,93 +1320,84 @@ async function promptSaveAfterCalibration() {
 // ═════════════════════════════════════════════════════════════
 
 async function applyVariant(variant) {
-  const wbConfig = vscode.workspace.getConfiguration('workbench');
-  const currentWb = wbConfig.get('colorCustomizations') || {};
+  try {
+    const allColors = Object.assign({}, variant.ui, {
+      'editor.background': variant.bg,
+      'editor.foreground': variant.fg,
+      'editorError.foreground': variant.err,
+    });
 
-  const nextWb = Object.assign({}, currentWb, variant.ui, {
-    'editor.background': variant.bg,
-    'editor.foreground': variant.fg,
-    'editorError.foreground': variant.err,
-  });
+    // Страховка: отбрасываем всё, что не похоже на HEX-цвет
+    for (const key of Object.keys(allColors)) {
+      const val = allColors[key];
+      if (typeof val !== 'string' || !val.match(/^(#[0-9a-fA-F]{6}|transparent)$/)) {
+        console.error('Calibra: некорректное значение для', key, '=', val);
+        delete allColors[key];
+      }
+    }
 
-  await wbConfig.update(
-    'colorCustomizations',
-    nextWb,
-    vscode.ConfigurationTarget.Global
-  );
+    const wbConfig = vscode.workspace.getConfiguration('workbench');
+    const currentWb = wbConfig.get('colorCustomizations') || {};
 
-  const tkConfig = vscode.workspace.getConfiguration('editor');
-  const currentTk = tkConfig.get('tokenColorCustomizations') || {};
+    const nextWb = Object.assign({}, currentWb, allColors);
 
-  // ─── Вычищенный набор textMateRules ─────────────────────
-  // Принципы:
-  //   1. Не используем голый `keyword` — иначе операторы (+ - || !)
-  //      окрасятся цветом ключевых слов.
-  //   2. Не используем `meta.function-call` — это обёртка вызова,
-  //      она перебивает строки, числа и свойства внутри аргументов.
-  //   3. Не дублируем подтипы, если уже задан родитель.
-  const nextTk = Object.assign({}, currentTk, {
-    textMateRules: [
-      { scope: 'comment', settings: { foreground: variant.com, fontStyle: 'italic' } },
+    await wbConfig.update(
+      'colorCustomizations',
+      nextWb,
+      vscode.ConfigurationTarget.Global
+    );
 
-      { scope: 'string', settings: { foreground: variant.str } },
+    const tkConfig = vscode.workspace.getConfiguration('editor');
+    const currentTk = tkConfig.get('tokenColorCustomizations') || {};
 
-      { scope: 'constant.numeric', settings: { foreground: variant.num } },
+    const nextTk = Object.assign({}, currentTk, {
+      textMateRules: [
+        { scope: 'comment', settings: { foreground: variant.com, fontStyle: 'italic' } },
+        { scope: 'string', settings: { foreground: variant.str } },
+        { scope: 'constant.numeric', settings: { foreground: variant.num } },
+        { scope: 'constant.language', settings: { foreground: variant.con } },
+        {
+          scope: ['keyword.control', 'keyword.other'],
+          settings: { foreground: variant.kw },
+        },
+        {
+          scope: ['storage', 'storage.type', 'storage.modifier'],
+          settings: { foreground: variant.kw },
+        },
+        {
+          scope: [
+            'entity.name.type',
+            'entity.name.class',
+            'entity.name.interface',
+            'support.type',
+            'support.class',
+          ],
+          settings: { foreground: variant.typ },
+        },
+        {
+          scope: ['entity.name.function', 'support.function'],
+          settings: { foreground: variant.fn },
+        },
+        {
+          scope: [
+            'variable.other.property',
+            'meta.object-literal.key',
+            'support.variable.property',
+          ],
+          settings: { foreground: variant.prp },
+        },
+      ],
+    });
 
-      { scope: 'constant.language', settings: { foreground: variant.con } },
-
-      {
-        scope: [
-          'keyword.control',
-          'keyword.other',
-        ],
-        settings: { foreground: variant.kw },
-      },
-
-      {
-        scope: [
-          'storage',
-          'storage.type',
-          'storage.modifier',
-        ],
-        settings: { foreground: variant.kw },
-      },
-
-      {
-        scope: [
-          'entity.name.type',
-          'entity.name.class',
-          'entity.name.interface',
-          'support.type',
-          'support.class',
-        ],
-        settings: { foreground: variant.typ },
-      },
-
-      {
-        scope: [
-          'entity.name.function',
-          'support.function',
-        ],
-        settings: { foreground: variant.fn },
-      },
-
-      {
-        scope: [
-          'variable.other.property',
-          'meta.object-literal.key',
-          'support.variable.property',
-        ],
-        settings: { foreground: variant.prp },
-      },
-    ],
-  });
-
-  await tkConfig.update(
-    'tokenColorCustomizations',
-    nextTk,
-    vscode.ConfigurationTarget.Global
-  );
+    await tkConfig.update(
+      'tokenColorCustomizations',
+      nextTk,
+      vscode.ConfigurationTarget.Global
+    );
+  } catch (e) {
+    console.error('Calibra: ошибка применения варианта', e);
+    vscode.window.showErrorMessage('Calibra: не удалось применить цвета — ' + e.message);
+  }
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -1324,7 +1407,7 @@ async function applyVariant(variant) {
 function hl(text, color, key, highlight) {
   const base = `<span style="color:${color}">${text}</span>`;
   if (key && key === highlight) {
-    return `<span style="outline:1px dashed rgba(255,255,255,0.35); outline-offset:2px; border-radius:2px;">${base}</span>`;
+    return `<span style="outline:1px dashed rgba(128,128,128,0.5); outline-offset:2px; border-radius:2px;">${base}</span>`;
   }
   return base;
 }

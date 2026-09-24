@@ -2,7 +2,7 @@
   "name": "calibra",
   "displayName": "Calibra",
   "description": "Персональная калибровка темы VS Code под ваше зрение",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "publisher": "pwrmind",
   "pricing": "Free",
   "engines": {
@@ -58,6 +58,10 @@
       {
         "command": "calibra.showActive",
         "title": "Calibra: показать активный профиль"
+      },
+      {
+        "command": "calibra.purge",
+        "title": "Calibra: полностью очистить настройки (аварийный сброс)"
       },
       {
         "command": "calibra.forgetAll",
