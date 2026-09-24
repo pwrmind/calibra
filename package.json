@@ -2,8 +2,9 @@
   "name": "calibra",
   "displayName": "Calibra",
   "description": "Персональная калибровка темы VS Code под ваше зрение",
-  "version": "0.3.0",
-  "publisher": "your-name",
+  "version": "0.5.0",
+  "publisher": "pwrmind",
+  "pricing": "Free",
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -24,19 +25,43 @@
       },
       {
         "command": "calibra.reset",
-        "title": "Calibra: сбросить цвета"
+        "title": "Calibra: вернуть цвета до сессии"
+      },
+      {
+        "command": "calibra.saveAs",
+        "title": "Calibra: сохранить текущие цвета как новый профиль"
       },
       {
         "command": "calibra.save",
-        "title": "Calibra: сохранить текущие цвета как профиль"
+        "title": "Calibra: обновить активный профиль"
       },
       {
-        "command": "calibra.restore",
-        "title": "Calibra: восстановить сохранённый профиль"
+        "command": "calibra.load",
+        "title": "Calibra: загрузить профиль"
       },
       {
-        "command": "calibra.forget",
-        "title": "Calibra: забыть сохранённый профиль и состояние"
+        "command": "calibra.delete",
+        "title": "Calibra: удалить профиль"
+      },
+      {
+        "command": "calibra.rename",
+        "title": "Calibra: переименовать профиль"
+      },
+      {
+        "command": "calibra.export",
+        "title": "Calibra: экспортировать профиль в файл"
+      },
+      {
+        "command": "calibra.import",
+        "title": "Calibra: импортировать профиль из файла"
+      },
+      {
+        "command": "calibra.showActive",
+        "title": "Calibra: показать активный профиль"
+      },
+      {
+        "command": "calibra.forgetAll",
+        "title": "Calibra: удалить все профили и состояние"
       }
     ]
   }

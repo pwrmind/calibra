@@ -1,4 +1,7 @@
 const vscode = require('vscode');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 // ═════════════════════════════════════════════════════════════
 //  БЛОК 1. sRGB и HEX
@@ -147,7 +150,7 @@ function apcaContrast(textRgb, bgRgb) {
 }
 
 // ═════════════════════════════════════════════════════════════
-//  БЛОК 4. Базовые контрасты токенов
+//  БЛОК 4. Токены и решатель контраста
 // ═════════════════════════════════════════════════════════════
 
 const TOKENS = {
@@ -163,7 +166,6 @@ const TOKENS = {
   err: { lc: 72, a:  0.150, b:  0.040 },
 };
 
-// Решатель APCA: подбирает L так, чтобы контраст был равен targetLc
 function solveTextForLc(bgOklab, targetLc, chromaA, chromaB) {
   const bgRgbRaw = oklabToRgb(bgOklab.L, bgOklab.a, bgOklab.b);
   const bgRgb = {
@@ -175,13 +177,8 @@ function solveTextForLc(bgOklab, targetLc, chromaA, chromaB) {
   const goingLight = bgOklab.L < 0.5;
 
   let lo, hi;
-  if (goingLight) {
-    lo = bgOklab.L;
-    hi = 1.0;
-  } else {
-    lo = 0.0;
-    hi = bgOklab.L;
-  }
+  if (goingLight) { lo = bgOklab.L; hi = 1.0; }
+  else            { lo = 0.0;        hi = bgOklab.L; }
 
   let bestL = (lo + hi) / 2;
   let bestDiff = Infinity;
@@ -197,18 +194,10 @@ function solveTextForLc(bgOklab, targetLc, chromaA, chromaB) {
     const lc = Math.abs(apcaContrast(rgb, bgRgb));
     const diff = Math.abs(lc - targetLc);
 
-    if (diff < bestDiff) {
-      bestDiff = diff;
-      bestL = mid;
-    }
+    if (diff < bestDiff) { bestDiff = diff; bestL = mid; }
 
-    if (goingLight) {
-      if (lc < targetLc) lo = mid;
-      else hi = mid;
-    } else {
-      if (lc < targetLc) hi = mid;
-      else lo = mid;
-    }
+    if (goingLight) { if (lc < targetLc) lo = mid; else hi = mid; }
+    else            { if (lc < targetLc) hi = mid; else lo = mid; }
   }
 
   return oklabToHex({ L: bestL, a: chromaA, b: chromaB });
@@ -224,13 +213,8 @@ function deriveSyntax(bgOklab, lcAdjust) {
 
     let a = t.a;
     let b = t.b;
-    if (key === 'fg') {
-      a = bgOklab.a * 0.2 + t.a;
-      b = bgOklab.b * 0.2 + t.b;
-    } else if (key === 'com') {
-      a = bgOklab.a * 0.3 + t.a;
-      b = bgOklab.b * 0.3 + t.b;
-    }
+    if (key === 'fg')  { a = bgOklab.a * 0.2 + t.a; b = bgOklab.b * 0.2 + t.b; }
+    if (key === 'com') { a = bgOklab.a * 0.3 + t.a; b = bgOklab.b * 0.3 + t.b; }
 
     result[key] = solveTextForLc(bgOklab, targetLc, a, b);
   }
@@ -239,21 +223,241 @@ function deriveSyntax(bgOklab, lcAdjust) {
 }
 
 // ═════════════════════════════════════════════════════════════
-//  БЛОК 5. Состояние калибровки и шаги
+//  БЛОК 5. Акцент и UI-элементы
 // ═════════════════════════════════════════════════════════════
-//
-//  state = {
-//    bg: { L, a, b },                    // текущий фон в OKLab
-//    lcAdjust: { fg: 0, com: 0, ... }    // дельты к базовым Lc из TOKENS
-//  }
-//
-//  Каждый шаг — это функция make(state), которая возвращает 4 новых состояния.
-//  Пользователь выбирает одно, оно становится новым состоянием.
+
+function deriveAccent(bg) {
+  const hueMag = Math.hypot(bg.a, bg.b);
+  let accentA, accentB;
+  if (hueMag < 0.008) {
+    accentA = -0.04;
+    accentB = -0.13;
+  } else {
+    const norm = 0.14 / hueMag;
+    accentA = bg.a * norm;
+    accentB = bg.b * norm;
+  }
+  const accentHex = solveTextForLc(bg, 60, accentA, accentB);
+  return hexToOklab(accentHex);
+}
+
+function deriveAnsi(bg) {
+  const dark = bg.L < 0.5;
+  const baseL   = dark ? 0.66 : 0.42;
+  const brightL = dark ? 0.82 : 0.30;
+
+  const hues = {
+    red:     { a:  0.15, b:  0.04 },
+    green:   { a: -0.10, b:  0.10 },
+    yellow:  { a: -0.02, b:  0.14 },
+    blue:    { a: -0.04, b: -0.13 },
+    magenta: { a:  0.15, b: -0.08 },
+    cyan:    { a: -0.10, b: -0.06 },
+  };
+
+  const ansi = {
+    black:       oklabToHex({ L: dark ? clamp(bg.L + 0.03, 0.03, 0.12) : 0.10, a: 0, b: 0 }),
+    white:       oklabToHex({ L: dark ? 0.84 : 0.28, a: 0, b: 0 }),
+    brightBlack: oklabToHex({ L: dark ? 0.45 : 0.50, a: 0, b: 0 }),
+    brightWhite: oklabToHex({ L: dark ? 0.96 : 0.08, a: 0, b: 0 }),
+  };
+
+  for (const name of Object.keys(hues)) {
+    const h = hues[name];
+    ansi[name] = oklabToHex({ L: baseL, a: h.a, b: h.b });
+    const cap = name[0].toUpperCase() + name.slice(1);
+    ansi['bright' + cap] = oklabToHex({
+      L: brightL,
+      a: h.a * 1.05,
+      b: h.b * 1.05,
+    });
+  }
+
+  return ansi;
+}
+
+function deriveUI(bg, accent) {
+  const accentHex = oklabToHex(accent);
+
+  const surface = (dL) => oklabToHex({
+    L: clamp(bg.L + dL, 0.02, 0.98),
+    a: bg.a + accent.a * 0.02,
+    b: bg.b + accent.b * 0.02,
+  });
+
+  const textOn = (surfaceHex, lc) => {
+    const sOklab = hexToOklab(surfaceHex);
+    return solveTextForLc(sOklab, lc, bg.a * 0.1, bg.b * 0.1);
+  };
+
+  const sideBarBg      = surface(-0.015);
+  const activityBarBg  = surface(-0.06);
+  const panelBg        = surface(-0.02);
+  const tabInactiveBg  = surface(-0.025);
+  const inputBg        = surface(-0.04);
+  const dropdownBg     = surface(-0.03);
+  const widgetBg       = surface(0.03);
+  const selectionBg    = surface(0.06);
+
+  const ansi = deriveAnsi(bg);
+
+  const sideBarFg       = textOn(sideBarBg, 70);
+  const activityBarFg   = textOn(activityBarBg, 70);
+  const panelFg         = textOn(panelBg, 70);
+  const tabInactiveFg   = textOn(tabInactiveBg, 50);
+  const inputFg         = textOn(inputBg, 80);
+  const dropdownFg      = textOn(dropdownBg, 80);
+  const widgetFg        = textOn(widgetBg, 80);
+  const selectionFg     = textOn(selectionBg, 80);
+
+  const onAccent        = textOn(accentHex, 80);
+
+  return {
+    'editorLineNumber.foreground':        textOn(oklabToHex(bg), 38),
+    'editorLineNumber.activeForeground':  textOn(oklabToHex(bg), 60),
+    'editorCursor.foreground':            accentHex,
+    'editor.selectionBackground':         selectionBg,
+    'editor.selectionHighlightBackground': surface(0.04),
+    'editor.lineHighlightBackground':     surface(0.02),
+    'editorWhitespace.foreground':        textOn(oklabToHex(bg), 22),
+    'editorIndentGuide.background1':      textOn(oklabToHex(bg), 18),
+    'editorIndentGuide.activeBackground1': textOn(oklabToHex(bg), 38),
+    'editorOverviewRuler.border':         surface(0.04),
+    'editorGutter.background':            oklabToHex(bg),
+    'editorBracketMatch.background':      surface(0.05),
+    'editorBracketMatch.border':          accentHex,
+
+    'sideBar.background':             sideBarBg,
+    'sideBar.foreground':             sideBarFg,
+    'sideBar.border':                 surface(0.02),
+    'sideBarSectionHeader.background': surface(-0.04),
+    'sideBarSectionHeader.foreground': textOn(surface(-0.04), 65),
+
+    'activityBar.background':            activityBarBg,
+    'activityBar.foreground':            activityBarFg,
+    'activityBar.inactiveForeground':    textOn(activityBarBg, 40),
+    'activityBar.activeBorder':          accentHex,
+    'activityBar.activeBackground':      surface(-0.03),
+    'activityBar.border':                surface(0.02),
+    'activityBarBadge.background':       accentHex,
+    'activityBarBadge.foreground':       onAccent,
+
+    'statusBar.background':              accentHex,
+    'statusBar.foreground':              onAccent,
+    'statusBar.border':                  surface(0.03),
+    'statusBarItem.hoverBackground':     oklabToHex({
+      L: clamp(accent.L + 0.06, 0.02, 0.98), a: accent.a, b: accent.b,
+    }),
+    'statusBarItem.remoteBackground':    accentHex,
+    'statusBarItem.remoteForeground':    onAccent,
+
+    'titleBar.activeBackground':   activityBarBg,
+    'titleBar.activeForeground':   activityBarFg,
+    'titleBar.inactiveBackground': activityBarBg,
+    'titleBar.inactiveForeground': textOn(activityBarBg, 40),
+    'titleBar.border':             surface(0.02),
+
+    'tab.activeBackground':              oklabToHex(bg),
+    'tab.activeForeground':              textOn(oklabToHex(bg), 80),
+    'tab.inactiveBackground':            tabInactiveBg,
+    'tab.inactiveForeground':            tabInactiveFg,
+    'tab.border':                        surface(0.02),
+    'tab.activeBorderTop':               accentHex,
+    'tab.unfocusedActiveBorderTop':      surface(0.05),
+    'editorGroupHeader.tabsBackground':  tabInactiveBg,
+    'editorGroupHeader.tabsBorder':      surface(0.02),
+    'editorGroupHeader.noTabsBackground': tabInactiveBg,
+    'editorGroup.border':                surface(0.04),
+
+    'panel.background':             panelBg,
+    'panel.foreground':             panelFg,
+    'panel.border':                 surface(0.03),
+    'panelTitle.activeForeground':  textOn(panelBg, 80),
+    'panelTitle.inactiveForeground': textOn(panelBg, 55),
+    'panelTitle.activeBorder':      accentHex,
+    'terminal.background':          panelBg,
+    'terminal.foreground':          panelFg,
+    'terminalCursor.foreground':    accentHex,
+    'terminal.selectionBackground': surface(0.06),
+    'terminal.border':              surface(0.03),
+
+    'input.background':               inputBg,
+    'input.foreground':               inputFg,
+    'input.border':                   surface(0.05),
+    'input.placeholderForeground':    textOn(inputBg, 45),
+    'inputOption.activeBackground':   accentHex,
+    'inputOption.activeForeground':   onAccent,
+    'dropdown.background':            dropdownBg,
+    'dropdown.foreground':            dropdownFg,
+    'dropdown.border':                surface(0.05),
+    'button.background':              accentHex,
+    'button.foreground':              onAccent,
+    'button.hoverBackground':         oklabToHex({
+      L: clamp(accent.L + 0.06, 0.02, 0.98), a: accent.a, b: accent.b,
+    }),
+    'button.secondaryBackground':     surface(0.06),
+    'button.secondaryForeground':     textOn(surface(0.06), 80),
+    'button.secondaryHoverBackground': surface(0.09),
+
+    'focusBorder':                        accentHex,
+    'list.activeSelectionBackground':     selectionBg,
+    'list.activeSelectionForeground':     selectionFg,
+    'list.inactiveSelectionBackground':   surface(0.03),
+    'list.hoverBackground':               surface(0.04),
+    'list.focusOutline':                  accentHex,
+    'list.highlightForeground':           accentHex,
+
+    'badge.background': accentHex,
+    'badge.foreground': onAccent,
+
+    'scrollbar.shadow':                    'transparent',
+    'scrollbarSlider.background':          surface(0.10),
+    'scrollbarSlider.hoverBackground':     surface(0.14),
+    'scrollbarSlider.activeBackground':    surface(0.18),
+
+    'minimap.background':           oklabToHex(bg),
+    'minimap.selectionHighlight':   surface(0.10),
+
+    'editorWidget.background':                  widgetBg,
+    'editorWidget.foreground':                  widgetFg,
+    'editorWidget.border':                      surface(0.06),
+    'editorSuggestWidget.background':           widgetBg,
+    'editorSuggestWidget.foreground':           widgetFg,
+    'editorSuggestWidget.selectedBackground':   surface(0.06),
+
+    'notifications.background': widgetBg,
+    'notifications.foreground': widgetFg,
+
+    'terminal.ansiBlack':         ansi.black,
+    'terminal.ansiRed':           ansi.red,
+    'terminal.ansiGreen':         ansi.green,
+    'terminal.ansiYellow':        ansi.yellow,
+    'terminal.ansiBlue':          ansi.blue,
+    'terminal.ansiMagenta':       ansi.magenta,
+    'terminal.ansiCyan':          ansi.cyan,
+    'terminal.ansiWhite':         ansi.white,
+    'terminal.ansiBrightBlack':   ansi.brightBlack,
+    'terminal.ansiBrightRed':     ansi.brightRed,
+    'terminal.ansiBrightGreen':   ansi.brightGreen,
+    'terminal.ansiBrightYellow':  ansi.brightYellow,
+    'terminal.ansiBrightBlue':    ansi.brightBlue,
+    'terminal.ansiBrightMagenta': ansi.brightMagenta,
+    'terminal.ansiBrightCyan':    ansi.brightCyan,
+    'terminal.ansiBrightWhite':   ansi.brightWhite,
+  };
+}
+
+// ═════════════════════════════════════════════════════════════
+//  БЛОК 6. Состояние и шаги
+// ═════════════════════════════════════════════════════════════
 
 function cloneState(s) {
   return {
     bg: { L: s.bg.L, a: s.bg.a, b: s.bg.b },
     lcAdjust: Object.assign({}, s.lcAdjust),
+    accent: s.accent
+      ? { L: s.accent.L, a: s.accent.a, b: s.accent.b }
+      : undefined,
   };
 }
 
@@ -261,277 +465,620 @@ function getInitialState(fromHex) {
   return {
     bg: hexToOklab(fromHex),
     lcAdjust: {},
+    accent: undefined,
   };
 }
 
 function stateToVariant(state) {
   const bgHex = oklabToHex(state.bg);
   const syn = deriveSyntax(state.bg, state.lcAdjust);
-  return Object.assign({ bg: bgHex }, syn);
+  const accent = state.accent || deriveAccent(state.bg);
+  const ui = deriveUI(state.bg, accent);
+
+  return Object.assign(
+    {
+      bg: bgHex,
+      accentBg: oklabToHex(accent),
+    },
+    syn,
+    { ui }
+  );
 }
 
+const STEP_TITLES_TOTAL = 11;
+
 const STEPS = [
-  // ─── 1. Яркость фона, грубо ────────────────────────────────
   {
-    title: 'Шаг 1 из 10. Яркость фона',
+    title: `Шаг 1 из ${STEP_TITLES_TOTAL}. Яркость фона`,
     hint: 'Какой уровень освещения вам комфортнее?',
     highlight: null,
-    make: (s) => {
-      const deltas = [-0.16, -0.06, 0.06, 0.16];
-      return deltas.map((d) => {
-        const c = cloneState(s);
-        c.bg.L = clamp(c.bg.L + d, 0.06, 0.94);
-        return c;
-      });
-    },
+    make: (s) => [-0.16, -0.06, 0.06, 0.16].map((d) => {
+      const c = cloneState(s);
+      c.bg.L = clamp(c.bg.L + d, 0.06, 0.94);
+      return c;
+    }),
   },
-
-  // ─── 2. Яркость фона, тонко ────────────────────────────────
   {
-    title: 'Шаг 2 из 10. Яркость фона (уточнение)',
+    title: `Шаг 2 из ${STEP_TITLES_TOTAL}. Яркость фона (уточнение)`,
     hint: 'Теперь — совсем небольшая разница.',
     highlight: null,
-    make: (s) => {
-      const deltas = [-0.045, -0.015, 0.015, 0.045];
-      return deltas.map((d) => {
-        const c = cloneState(s);
-        c.bg.L = clamp(c.bg.L + d, 0.06, 0.94);
-        return c;
-      });
-    },
+    make: (s) => [-0.045, -0.015, 0.015, 0.045].map((d) => {
+      const c = cloneState(s);
+      c.bg.L = clamp(c.bg.L + d, 0.06, 0.94);
+      return c;
+    }),
   },
-
-  // ─── 3. Оттенок фона, грубо ────────────────────────────────
   {
-    title: 'Шаг 3 из 10. Оттенок фона',
+    title: `Шаг 3 из ${STEP_TITLES_TOTAL}. Оттенок фона`,
     hint: 'Тёплый, холодный или нейтральный?',
     highlight: null,
-    make: (s) => {
-      const shifts = [
-        { da:  0.030, db:  0.020 }, // тёплый
-        { da: -0.030, db: -0.020 }, // холодный
-        { da:  0.000, db:  0.000 }, // нейтральный
-        { da:  0.020, db: -0.030 }, // холодно-синий
-      ];
-      return shifts.map((sh) => {
-        const c = cloneState(s);
-        c.bg.a = clamp(c.bg.a + sh.da, -0.18, 0.18);
-        c.bg.b = clamp(c.bg.b + sh.db, -0.18, 0.18);
-        return c;
-      });
-    },
+    make: (s) => [
+      { da:  0.030, db:  0.020 },
+      { da: -0.030, db: -0.020 },
+      { da:  0.000, db:  0.000 },
+      { da:  0.020, db: -0.030 },
+    ].map((sh) => {
+      const c = cloneState(s);
+      c.bg.a = clamp(c.bg.a + sh.da, -0.18, 0.18);
+      c.bg.b = clamp(c.bg.b + sh.db, -0.18, 0.18);
+      return c;
+    }),
   },
-
-  // ─── 4. Оттенок фона, тонко ────────────────────────────────
   {
-    title: 'Шаг 4 из 10. Оттенок фона (уточнение)',
+    title: `Шаг 4 из ${STEP_TITLES_TOTAL}. Оттенок фона (уточнение)`,
     hint: 'Едва заметные сдвиги оттенка.',
     highlight: null,
-    make: (s) => {
-      const shifts = [
-        { da:  0.012, db:  0.008 },
-        { da: -0.012, db: -0.008 },
-        { da:  0.008, db: -0.012 },
-        { da: -0.008, db:  0.012 },
-      ];
-      return shifts.map((sh) => {
-        const c = cloneState(s);
-        c.bg.a = clamp(c.bg.a + sh.da, -0.18, 0.18);
-        c.bg.b = clamp(c.bg.b + sh.db, -0.18, 0.18);
-        return c;
-      });
-    },
+    make: (s) => [
+      { da:  0.012, db:  0.008 },
+      { da: -0.012, db: -0.008 },
+      { da:  0.008, db: -0.012 },
+      { da: -0.008, db:  0.012 },
+    ].map((sh) => {
+      const c = cloneState(s);
+      c.bg.a = clamp(c.bg.a + sh.da, -0.18, 0.18);
+      c.bg.b = clamp(c.bg.b + sh.db, -0.18, 0.18);
+      return c;
+    }),
   },
-
-  // ─── 5. Насыщенность фона ──────────────────────────────────
   {
-    title: 'Шаг 5 из 10. Насыщенность фона',
+    title: `Шаг 5 из ${STEP_TITLES_TOTAL}. Насыщенность фона`,
     hint: 'Насколько выраженным должен быть оттенок?',
     highlight: null,
-    make: (s) => {
-      const scales = [0.4, 0.8, 1.1, 1.4];
-      return scales.map((k) => {
-        const c = cloneState(s);
-        c.bg.a = clamp(c.bg.a * k, -0.20, 0.20);
-        c.bg.b = clamp(c.bg.b * k, -0.20, 0.20);
-        return c;
-      });
-    },
+    make: (s) => [0.4, 0.8, 1.1, 1.4].map((k) => {
+      const c = cloneState(s);
+      c.bg.a = clamp(c.bg.a * k, -0.20, 0.20);
+      c.bg.b = clamp(c.bg.b * k, -0.20, 0.20);
+      return c;
+    }),
   },
-
-  // ─── 6. Контраст основного текста ──────────────────────────
   {
-    title: 'Шаг 6 из 10. Контраст основного текста',
+    title: `Шаг 6 из ${STEP_TITLES_TOTAL}. Акцентный цвет`,
+    hint: 'Цвет кнопок, фокуса, статус-бара и активных элементов.',
+    highlight: null,
+    make: (s) => [
+      { a: -0.04, b: -0.13 },
+      { a:  0.15, b: -0.08 },
+      { a: -0.10, b:  0.10 },
+      { a:  0.13, b:  0.06 },
+    ].map((p) => {
+      const c = cloneState(s);
+      const accentHex = solveTextForLc(s.bg, 60, p.a, p.b);
+      c.accent = hexToOklab(accentHex);
+      return c;
+    }),
+  },
+  {
+    title: `Шаг 7 из ${STEP_TITLES_TOTAL}. Контраст основного текста`,
     hint: 'Насколько ярким должен быть обычный код?',
     highlight: 'fg',
-    make: (s) => {
-      const deltas = [-14, -5, 5, 14];
-      return deltas.map((d) => {
-        const c = cloneState(s);
-        c.lcAdjust.fg = (c.lcAdjust.fg || 0) + d;
-        return c;
-      });
-    },
+    make: (s) => [-14, -5, 5, 14].map((d) => {
+      const c = cloneState(s);
+      c.lcAdjust.fg = (c.lcAdjust.fg || 0) + d;
+      return c;
+    }),
   },
-
-  // ─── 7. Контраст комментариев ──────────────────────────────
   {
-    title: 'Шаг 7 из 10. Контраст комментариев',
+    title: `Шаг 8 из ${STEP_TITLES_TOTAL}. Контраст комментариев`,
     hint: 'Комментарии должны быть заметнее или тише?',
     highlight: 'com',
-    make: (s) => {
-      const deltas = [-14, -5, 5, 14];
-      return deltas.map((d) => {
-        const c = cloneState(s);
-        c.lcAdjust.com = (c.lcAdjust.com || 0) + d;
-        return c;
-      });
-    },
+    make: (s) => [-14, -5, 5, 14].map((d) => {
+      const c = cloneState(s);
+      c.lcAdjust.com = (c.lcAdjust.com || 0) + d;
+      return c;
+    }),
   },
-
-  // ─── 8. Контраст свойств объектов ──────────────────────────
   {
-    title: 'Шаг 8 из 10. Контраст свойств и методов',
+    title: `Шаг 9 из ${STEP_TITLES_TOTAL}. Контраст свойств объектов`,
     hint: 'api.get, res.data — насколько они должны выделяться?',
     highlight: 'prp',
-    make: (s) => {
-      const deltas = [-12, -4, 4, 12];
-      return deltas.map((d) => {
-        const c = cloneState(s);
-        c.lcAdjust.prp = (c.lcAdjust.prp || 0) + d;
-        return c;
-      });
-    },
+    make: (s) => [-12, -4, 4, 12].map((d) => {
+      const c = cloneState(s);
+      c.lcAdjust.prp = (c.lcAdjust.prp || 0) + d;
+      return c;
+    }),
   },
-
-  // ─── 9. Баланс строк и чисел ───────────────────────────────
   {
-    title: 'Шаг 9 из 10. Строки и числа',
+    title: `Шаг 10 из ${STEP_TITLES_TOTAL}. Строки и числа`,
     hint: 'Какой баланс контраста между строками и числами удобнее?',
     highlight: 'num',
-    make: (s) => {
-      const pairs = [
-        { str: -10, num:  10 },
-        { str:  -3, num:   3 },
-        { str:   3, num:  -3 },
-        { str:  10, num: -10 },
-      ];
-      return pairs.map((p) => {
-        const c = cloneState(s);
-        c.lcAdjust.str = (c.lcAdjust.str || 0) + p.str;
-        c.lcAdjust.num = (c.lcAdjust.num || 0) + p.num;
-        return c;
-      });
-    },
+    make: (s) => [
+      { str: -10, num:  10 },
+      { str:  -3, num:   3 },
+      { str:   3, num:  -3 },
+      { str:  10, num: -10 },
+    ].map((p) => {
+      const c = cloneState(s);
+      c.lcAdjust.str = (c.lcAdjust.str || 0) + p.str;
+      c.lcAdjust.num = (c.lcAdjust.num || 0) + p.num;
+      return c;
+    }),
   },
-
-  // ─── 10. Финальная полировка фона ──────────────────────────
   {
-    title: 'Шаг 10 из 10. Финальная полировка',
+    title: `Шаг 11 из ${STEP_TITLES_TOTAL}. Финальная полировка`,
     hint: 'Совсем небольшая разница в фоне.',
     highlight: null,
-    make: (s) => {
-      const deltas = [-0.018, -0.006, 0.006, 0.018];
-      return deltas.map((d) => {
-        const c = cloneState(s);
-        c.bg.L = clamp(c.bg.L + d, 0.06, 0.94);
-        return c;
-      });
-    },
+    make: (s) => [-0.018, -0.006, 0.006, 0.018].map((d) => {
+      const c = cloneState(s);
+      c.bg.L = clamp(c.bg.L + d, 0.06, 0.94);
+      return c;
+    }),
   },
 ];
 
 // ═════════════════════════════════════════════════════════════
-//  БЛОК 6. Расширение: активация и команды
+//  БЛОК 7. Профили: хранилище
 // ═════════════════════════════════════════════════════════════
 
-let originalWorkbench = null;
-let originalTokens = null;
-let calib = null;
-let extensionContext = null;
+const PROFILES_KEY = 'calibra.profiles';
+const ACTIVE_KEY   = 'calibra.activeProfileId';
+const CALIB_KEY    = 'calibra.calibration';
 
-function activate(context) {
-  extensionContext = context;
+function genId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
 
-  context.subscriptions.push(
-    vscode.commands.registerCommand('calibra.start', () => {
-      startCalibration(null);
-    })
+function getProfiles() {
+  return extensionContext.globalState.get(PROFILES_KEY) || [];
+}
+
+async function setProfiles(list) {
+  await extensionContext.globalState.update(PROFILES_KEY, list);
+}
+
+function getActiveId() {
+  return extensionContext.globalState.get(ACTIVE_KEY) || null;
+}
+
+async function setActiveId(id) {
+  await extensionContext.globalState.update(ACTIVE_KEY, id || null);
+}
+
+function getActiveProfile() {
+  const id = getActiveId();
+  if (!id) return null;
+  return getProfiles().find((p) => p.id === id) || null;
+}
+
+// ═════════════════════════════════════════════════════════════
+//  БЛОК 8. Профили: захват и применение
+// ═════════════════════════════════════════════════════════════
+
+function captureCurrentColors() {
+  return {
+    workbench:
+      vscode.workspace.getConfiguration('workbench').get('colorCustomizations') || {},
+    tokens:
+      vscode.workspace.getConfiguration('editor').get('tokenColorCustomizations') || {},
+  };
+}
+
+async function applyColors(data) {
+  await vscode.workspace.getConfiguration('workbench').update(
+    'colorCustomizations',
+    data.workbench || {},
+    vscode.ConfigurationTarget.Global
   );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand('calibra.resume', () => {
-      const saved = context.globalState.get('calibra.state');
-      if (!saved) {
-        vscode.window.showInformationMessage(
-          'Calibra: сохранённого состояния нет. Начните новую калибровку.'
-        );
-        return;
-      }
-      startCalibration(saved);
-    })
-  );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand('calibra.reset', async () => {
-      await vscode.workspace.getConfiguration('workbench').update(
-        'colorCustomizations',
-        originalWorkbench || {},
-        vscode.ConfigurationTarget.Global
-      );
-      await vscode.workspace.getConfiguration('editor').update(
-        'tokenColorCustomizations',
-        originalTokens || {},
-        vscode.ConfigurationTarget.Global
-      );
-      vscode.window.showInformationMessage('Calibra: цвета возвращены как были.');
-    })
-  );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand('calibra.save', async () => {
-      await saveProfileFromCurrent();
-      vscode.window.showInformationMessage('Calibra: текущие цвета сохранены как профиль.');
-    })
-  );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand('calibra.restore', async () => {
-      const restored = await restoreProfile();
-      if (restored) {
-        vscode.window.showInformationMessage('Calibra: профиль восстановлен.');
-      } else {
-        vscode.window.showInformationMessage('Calibra: сохранённого профиля пока нет.');
-      }
-    })
-  );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand('calibra.forget', async () => {
-      await context.globalState.update('calibra.profile', undefined);
-      await context.globalState.update('calibra.state', undefined);
-      vscode.window.showInformationMessage('Calibra: профиль и состояние удалены.');
-    })
+  await vscode.workspace.getConfiguration('editor').update(
+    'tokenColorCustomizations',
+    data.tokens || {},
+    vscode.ConfigurationTarget.Global
   );
 }
 
 // ═════════════════════════════════════════════════════════════
-//  БЛОК 7. Калибровка
+//  БЛОК 9. Профили: операции
 // ═════════════════════════════════════════════════════════════
 
-function startCalibration(resumeState) {
-  const wbConfig = vscode.workspace.getConfiguration('workbench');
-  const tkConfig = vscode.workspace.getConfiguration('editor');
+async function saveAsNewProfile() {
+  const colors = captureCurrentColors();
 
-  originalWorkbench = wbConfig.get('colorCustomizations') || {};
-  originalTokens = tkConfig.get('tokenColorCustomizations') || {};
+  const name = await vscode.window.showInputBox({
+    prompt: 'Название нового профиля',
+    value: 'Моя тема',
+    placeHolder: 'Например: Дневная, Ночная, Для работы',
+    validateInput: (v) => (v && v.trim() ? null : 'Название не может быть пустым'),
+  });
+  if (name === undefined) return null;
+
+  const now = Date.now();
+  const profile = {
+    id: genId(),
+    name: name.trim(),
+    workbench: colors.workbench,
+    tokens: colors.tokens,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const list = getProfiles();
+  list.push(profile);
+  await setProfiles(list);
+  await setActiveId(profile.id);
+
+  return profile;
+}
+
+async function overwriteActiveProfile() {
+  const active = getActiveProfile();
+  if (!active) return await saveAsNewProfile();
+
+  const colors = captureCurrentColors();
+  const list = getProfiles().map((p) =>
+    p.id === active.id
+      ? Object.assign({}, p, {
+          workbench: colors.workbench,
+          tokens: colors.tokens,
+          updatedAt: Date.now(),
+        })
+      : p
+  );
+  await setProfiles(list);
+
+  return list.find((p) => p.id === active.id);
+}
+
+async function pickProfile(placeHolder) {
+  const list = getProfiles();
+  if (list.length === 0) {
+    vscode.window.showInformationMessage('Calibra: профилей пока нет.');
+    return null;
+  }
+
+  const activeId = getActiveId();
+  const items = list.map((p) => {
+    const isActive = p.id === activeId;
+    const dateStr = new Date(p.updatedAt).toLocaleString('ru-RU');
+    return {
+      label: (isActive ? '$(star-full) ' : '$(circle-outline) ') + p.name,
+      description: isActive ? `активный · ${dateStr}` : dateStr,
+      id: p.id,
+    };
+  });
+
+  const picked = await vscode.window.showQuickPick(items, {
+    placeHolder: placeHolder || 'Выберите профиль',
+    matchOnDescription: true,
+  });
+  if (!picked) return null;
+
+  return list.find((p) => p.id === picked.id) || null;
+}
+
+async function loadProfileFlow() {
+  const target = await pickProfile('Какой профиль загрузить?');
+  if (!target) return;
+
+  await applyColors(target);
+  await setActiveId(target.id);
+
+  vscode.window.showInformationMessage(`Calibra: загружен профиль «${target.name}».`);
+}
+
+async function deleteProfileFlow() {
+  const target = await pickProfile('Какой профиль удалить?');
+  if (!target) return;
+
+  const answer = await vscode.window.showWarningMessage(
+    `Удалить профиль «${target.name}»?`,
+    { modal: true },
+    'Удалить'
+  );
+  if (answer !== 'Удалить') return;
+
+  const list = getProfiles().filter((p) => p.id !== target.id);
+  await setProfiles(list);
+
+  if (getActiveId() === target.id) {
+    await setActiveId(null);
+  }
+
+  vscode.window.showInformationMessage(`Calibra: профиль «${target.name}» удалён.`);
+}
+
+async function renameProfileFlow() {
+  const target = await pickProfile('Какой профиль переименовать?');
+  if (!target) return;
+
+  const newName = await vscode.window.showInputBox({
+    prompt: 'Новое имя профиля',
+    value: target.name,
+    validateInput: (v) => (v && v.trim() ? null : 'Название не может быть пустым'),
+  });
+  if (newName === undefined) return;
+
+  const list = getProfiles().map((p) =>
+    p.id === target.id
+      ? Object.assign({}, p, { name: newName.trim(), updatedAt: Date.now() })
+      : p
+  );
+  await setProfiles(list);
+
+  vscode.window.showInformationMessage(
+    `Calibra: профиль переименован в «${newName.trim()}».`
+  );
+}
+
+async function showActiveProfileFlow() {
+  const active = getActiveProfile();
+  if (!active) {
+    vscode.window.showInformationMessage('Calibra: активного профиля нет.');
+    return;
+  }
+
+  const created = new Date(active.createdAt).toLocaleString('ru-RU');
+  const updated = new Date(active.updatedAt).toLocaleString('ru-RU');
+
+  vscode.window.showInformationMessage(
+    `Calibra: активный профиль — «${active.name}». Создан: ${created}. Обновлён: ${updated}.`
+  );
+}
+
+// ═════════════════════════════════════════════════════════════
+//  БЛОК 10. Профили: экспорт/импорт
+// ═════════════════════════════════════════════════════════════
+
+const EXPORT_FORMAT_VERSION = 1;
+
+function sanitizeFileName(name) {
+  return (
+    name
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 60) || 'calibra-profile'
+  );
+}
+
+async function exportProfileFlow() {
+  const list = getProfiles();
+  if (list.length === 0) {
+    vscode.window.showInformationMessage('Calibra: нечего экспортировать.');
+    return;
+  }
+
+  const activeId = getActiveId();
+  const items = [
+    { label: '$(archive) Все профили', description: `${list.length} шт.`, id: '__all__' },
+    ...list.map((p) => ({
+      label: '$(file) ' + p.name,
+      description:
+        (p.id === activeId ? 'активный · ' : '') +
+        new Date(p.updatedAt).toLocaleString('ru-RU'),
+      id: p.id,
+    })),
+  ];
+
+  const picked = await vscode.window.showQuickPick(items, {
+    placeHolder: 'Что экспортировать?',
+  });
+  if (!picked) return;
+
+  let toExport;
+  let suggested;
+  if (picked.id === '__all__') {
+    toExport = list;
+    suggested = 'calibra-all-profiles.json';
+  } else {
+    const one = list.find((p) => p.id === picked.id);
+    if (!one) return;
+    toExport = [one];
+    suggested = `calibra-${sanitizeFileName(one.name)}.json`;
+  }
+
+  const uri = await vscode.window.showSaveDialog({
+    defaultUri: vscode.Uri.file(path.join(os.homedir(), suggested)),
+    filters: { 'Calibra profile': ['json'] },
+    saveLabel: 'Экспортировать',
+  });
+  if (!uri) return;
+
+  const payload = {
+    calibra: EXPORT_FORMAT_VERSION,
+    exportedAt: Date.now(),
+    profiles: toExport.map((p) => ({
+      name: p.name,
+      workbench: p.workbench,
+      tokens: p.tokens,
+      createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
+    })),
+  };
+
+  try {
+    fs.writeFileSync(uri.fsPath, JSON.stringify(payload, null, 2), 'utf8');
+  } catch (e) {
+    vscode.window.showErrorMessage('Calibra: не удалось записать файл — ' + e.message);
+    return;
+  }
+
+  const count = toExport.length;
+  const word = count === 1 ? 'профиль' : 'профилей';
+  vscode.window.showInformationMessage(
+    `Calibra: экспортировано ${count} ${word} в ${uri.fsPath}`
+  );
+}
+
+async function importProfileFlow() {
+  const uris = await vscode.window.showOpenDialog({
+    canSelectMany: false,
+    filters: { 'Calibra profile': ['json'] },
+    openLabel: 'Импортировать',
+  });
+  if (!uris || uris.length === 0) return;
+
+  let payload;
+  try {
+    const raw = fs.readFileSync(uris[0].fsPath, 'utf8');
+    payload = JSON.parse(raw);
+  } catch (e) {
+    vscode.window.showErrorMessage('Calibra: не удалось прочитать файл — ' + e.message);
+    return;
+  }
+
+  if (
+    !payload ||
+    payload.calibra !== EXPORT_FORMAT_VERSION ||
+    !Array.isArray(payload.profiles)
+  ) {
+    vscode.window.showErrorMessage('Calibra: неизвестный формат файла.');
+    return;
+  }
+
+  const list = getProfiles();
+  let added = 0;
+  let skipped = 0;
+
+  for (const raw of payload.profiles) {
+    if (!raw || typeof raw.name !== 'string' || !raw.workbench || !raw.tokens) {
+      skipped++;
+      continue;
+    }
+
+    list.push({
+      id: genId(),
+      name: raw.name.trim() || 'Импортированный профиль',
+      workbench: raw.workbench,
+      tokens: raw.tokens,
+      createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
+      updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now(),
+    });
+    added++;
+  }
+
+  await setProfiles(list);
+
+  if (added === 0) {
+    vscode.window.showWarningMessage('Calibra: в файле не нашлось валидных профилей.');
+    return;
+  }
+
+  const word = added === 1 ? 'профиль' : 'профилей';
+  let msg = `Calibra: импортировано ${added} ${word}.`;
+  if (skipped > 0) msg += ` Пропущено записей: ${skipped}.`;
+  vscode.window.showInformationMessage(msg);
+}
+
+// ═════════════════════════════════════════════════════════════
+//  БЛОК 11. Активация и команды
+// ═════════════════════════════════════════════════════════════
+
+let extensionContext = null;
+let calib = null;
+let sessionSnapshot = null;
+
+function activate(context) {
+  extensionContext = context;
+
+  const register = (name, handler) => {
+    context.subscriptions.push(vscode.commands.registerCommand(name, handler));
+  };
+
+  register('calibra.start', () => startCalibration(null));
+
+  register('calibra.resume', () => {
+    const saved = context.globalState.get(CALIB_KEY);
+    if (!saved || !saved.state || !saved.state.bg) {
+      vscode.window.showInformationMessage(
+        'Calibra: сохранённого состояния нет. Начните новую калибровку.'
+      );
+      return;
+    }
+    startCalibration(saved);
+  });
+
+  register('calibra.reset', async () => {
+    if (!sessionSnapshot) {
+      vscode.window.showInformationMessage(
+        'Calibra: нет снимка для восстановления — калибровка ещё не запускалась в этой сессии.'
+      );
+      return;
+    }
+    await applyColors(sessionSnapshot);
+    vscode.window.showInformationMessage('Calibra: цвета возвращены как были до сессии.');
+  });
+
+  register('calibra.saveAs', async () => {
+    const p = await saveAsNewProfile();
+    if (p) vscode.window.showInformationMessage(`Calibra: профиль «${p.name}» сохранён.`);
+  });
+
+  register('calibra.save', async () => {
+    const active = getActiveProfile();
+    if (!active) {
+      const p = await saveAsNewProfile();
+      if (p) vscode.window.showInformationMessage(`Calibra: профиль «${p.name}» сохранён.`);
+      return;
+    }
+    const p = await overwriteActiveProfile();
+    if (p) vscode.window.showInformationMessage(`Calibra: профиль «${p.name}» обновлён.`);
+  });
+
+  register('calibra.load', loadProfileFlow);
+  register('calibra.delete', deleteProfileFlow);
+  register('calibra.rename', renameProfileFlow);
+  register('calibra.export', exportProfileFlow);
+  register('calibra.import', importProfileFlow);
+  register('calibra.showActive', showActiveProfileFlow);
+
+  register('calibra.forgetAll', async () => {
+    const answer = await vscode.window.showWarningMessage(
+      'Удалить все профили и сохранённое состояние Calibra? Это нельзя отменить.',
+      { modal: true },
+      'Удалить всё'
+    );
+    if (answer !== 'Удалить всё') return;
+
+    await context.globalState.update(PROFILES_KEY, []);
+    await context.globalState.update(ACTIVE_KEY, null);
+    await context.globalState.update(CALIB_KEY, undefined);
+
+    vscode.window.showInformationMessage('Calibra: все данные удалены.');
+  });
+}
+
+// ═════════════════════════════════════════════════════════════
+//  БЛОК 12. Калибровка
+// ═════════════════════════════════════════════════════════════
+
+async function startCalibration(resumeData) {
+  if (calib && calib.panel) {
+    try { calib.panel.dispose(); } catch (e) { /* noop */ }
+    calib = null;
+  }
+
+  if (!sessionSnapshot) {
+    sessionSnapshot = captureCurrentColors();
+  }
 
   let initialState;
-  if (resumeState && resumeState.bg && typeof resumeState.bg.L === 'number') {
-    initialState = cloneState(resumeState);
+  let initialStep;
+  if (resumeData && resumeData.state && resumeData.state.bg) {
+    initialState = cloneState(resumeData.state);
+    initialStep = clamp(resumeData.step || 1, 1, STEPS.length);
   } else {
-    const startHex = originalWorkbench['editor.background'] || '#1e1e1e';
+    const startHex = sessionSnapshot.workbench['editor.background'] || '#1e1e1e';
     initialState = getInitialState(startHex);
+    initialStep = 1;
   }
 
   const panel = vscode.window.createWebviewPanel(
@@ -541,32 +1088,23 @@ function startCalibration(resumeState) {
     { enableScripts: true }
   );
 
-  const firstStep = STEPS[0];
-  const candidateStates = firstStep.make(initialState);
-
   calib = {
     state: initialState,
-    step: 1,
-    candidates: candidateStates,
+    step: initialStep,
+    candidates: STEPS[initialStep - 1].make(initialState),
     panel,
   };
 
   panel.webview.html = getHtml();
 
   panel.webview.onDidReceiveMessage(async (msg) => {
-    if (msg.command === 'ready') {
-      sendRender();
-    } else if (msg.command === 'select') {
-      await handleSelect(msg.letter);
-    } else if (msg.command === 'finish') {
-      await finishCalibration();
-    }
+    if (msg.command === 'ready')       sendRender();
+    else if (msg.command === 'select') await handleSelect(msg.letter);
+    else if (msg.command === 'finish') await finishCalibration();
   });
 
   panel.onDidDispose(() => {
-    if (calib && calib.panel === panel) {
-      calib = null;
-    }
+    if (calib && calib.panel === panel) calib = null;
   });
 }
 
@@ -577,13 +1115,17 @@ function sendRender() {
   const total = STEPS.length;
   const progress = (calib.step - 1) / total;
 
+  const active = getActiveProfile();
+  const activeProfileName = active ? active.name : null;
+
   const cards = calib.candidates.map((state, idx) => {
     const v = stateToVariant(state);
-    const letter = 'ABCD'[idx];
     return {
-      letter,
+      letter: 'ABCD'[idx],
       bg: v.bg,
       fg: v.fg,
+      accentBg: v.accentBg,
+      accentFg: v.ui['statusBar.foreground'] || v.fg,
       preview: buildPreviewHtml(v, stepDef.highlight),
     };
   });
@@ -595,6 +1137,7 @@ function sendRender() {
     progress,
     stepNumber: calib.step,
     totalSteps: total,
+    activeProfileName,
     cards,
   });
 }
@@ -610,9 +1153,10 @@ async function handleSelect(letter) {
 
   await applyVariant(chosenVariant);
 
-  // Двигаемся к следующему шагу или завершаем
   const nextStep = calib.step + 1;
   if (nextStep > STEPS.length) {
+    calib.state = chosenState;
+    await saveCalibrationState();
     await finishCalibration();
     return;
   }
@@ -621,36 +1165,73 @@ async function handleSelect(letter) {
   calib.step = nextStep;
   calib.candidates = STEPS[nextStep - 1].make(chosenState);
 
+  await saveCalibrationState();
   sendRender();
+}
+
+async function saveCalibrationState() {
+  if (!extensionContext || !calib) return;
+  await extensionContext.globalState.update(CALIB_KEY, {
+    step: calib.step,
+    state: calib.state,
+  });
 }
 
 async function finishCalibration() {
   if (!calib) return;
 
-  // Применяем финальное состояние на всякий случай — вдруг был клик «Готово»
   const finalVariant = stateToVariant(calib.state);
   await applyVariant(finalVariant);
-
-  // Сохраняем результат
-  await saveProfileFromCurrent();
-  await extensionContext.globalState.update('calibra.state', calib.state);
-
-  vscode.window.showInformationMessage('Calibra: калибровка завершена и сохранена.');
+  await saveCalibrationState();
 
   const panel = calib.panel;
   calib = null;
   panel.dispose();
+
+  await promptSaveAfterCalibration();
+}
+
+async function promptSaveAfterCalibration() {
+  const active = getActiveProfile();
+
+  const items = [
+    { label: '$(add) Сохранить как новый профиль…', id: 'new' },
+  ];
+  if (active) {
+    items.push({ label: `$(save) Обновить «${active.name}»`, id: 'update' });
+  }
+  items.push({ label: '$(close) Не сохранять', id: 'skip' });
+
+  const picked = await vscode.window.showQuickPick(items, {
+    placeHolder: 'Что сделать с результатом калибровки?',
+  });
+
+  if (!picked || picked.id === 'skip') {
+    vscode.window.showInformationMessage('Calibra: калибровка применена.');
+    return;
+  }
+
+  if (picked.id === 'new') {
+    const p = await saveAsNewProfile();
+    if (p) vscode.window.showInformationMessage(`Calibra: профиль «${p.name}» сохранён.`);
+    return;
+  }
+
+  if (picked.id === 'update') {
+    const p = await overwriteActiveProfile();
+    if (p) vscode.window.showInformationMessage(`Calibra: профиль «${p.name}» обновлён.`);
+  }
 }
 
 // ═════════════════════════════════════════════════════════════
-//  БЛОК 8. Применение цвета к VS Code
+//  БЛОК 13. Применение цвета к VS Code
 // ═════════════════════════════════════════════════════════════
 
 async function applyVariant(variant) {
   const wbConfig = vscode.workspace.getConfiguration('workbench');
   const currentWb = wbConfig.get('colorCustomizations') || {};
 
-  const nextWb = Object.assign({}, currentWb, {
+  const nextWb = Object.assign({}, currentWb, variant.ui, {
     'editor.background': variant.bg,
     'editor.foreground': variant.fg,
     'editorError.foreground': variant.err,
@@ -665,30 +1246,40 @@ async function applyVariant(variant) {
   const tkConfig = vscode.workspace.getConfiguration('editor');
   const currentTk = tkConfig.get('tokenColorCustomizations') || {};
 
+  // ─── Вычищенный набор textMateRules ─────────────────────
+  // Принципы:
+  //   1. Не используем голый `keyword` — иначе операторы (+ - || !)
+  //      окрасятся цветом ключевых слов.
+  //   2. Не используем `meta.function-call` — это обёртка вызова,
+  //      она перебивает строки, числа и свойства внутри аргументов.
+  //   3. Не дублируем подтипы, если уже задан родитель.
   const nextTk = Object.assign({}, currentTk, {
     textMateRules: [
       { scope: 'comment', settings: { foreground: variant.com, fontStyle: 'italic' } },
+
       { scope: 'string', settings: { foreground: variant.str } },
+
       { scope: 'constant.numeric', settings: { foreground: variant.num } },
+
+      { scope: 'constant.language', settings: { foreground: variant.con } },
+
       {
         scope: [
-          'constant.language',
-          'constant.language.boolean',
-          'constant.language.null',
-          'constant.language.undefined',
-        ],
-        settings: { foreground: variant.con },
-      },
-      {
-        scope: [
-          'keyword',
-          'storage',
-          'storage.type',
-          'storage.modifier',
           'keyword.control',
+          'keyword.other',
         ],
         settings: { foreground: variant.kw },
       },
+
+      {
+        scope: [
+          'storage',
+          'storage.type',
+          'storage.modifier',
+        ],
+        settings: { foreground: variant.kw },
+      },
+
       {
         scope: [
           'entity.name.type',
@@ -699,14 +1290,15 @@ async function applyVariant(variant) {
         ],
         settings: { foreground: variant.typ },
       },
+
       {
         scope: [
           'entity.name.function',
           'support.function',
-          'meta.function-call',
         ],
         settings: { foreground: variant.fn },
       },
+
       {
         scope: [
           'variable.other.property',
@@ -726,50 +1318,9 @@ async function applyVariant(variant) {
 }
 
 // ═════════════════════════════════════════════════════════════
-//  БЛОК 9. Профиль
+//  БЛОК 14. Превью кода
 // ═════════════════════════════════════════════════════════════
 
-async function saveProfileFromCurrent() {
-  if (!extensionContext) return;
-
-  const profile = {
-    workbench:
-      vscode.workspace.getConfiguration('workbench').get('colorCustomizations') || {},
-    tokens:
-      vscode.workspace.getConfiguration('editor').get('tokenColorCustomizations') || {},
-    savedAt: Date.now(),
-  };
-
-  await extensionContext.globalState.update('calibra.profile', profile);
-}
-
-async function restoreProfile() {
-  if (!extensionContext) return false;
-
-  const profile = extensionContext.globalState.get('calibra.profile');
-  if (!profile) return false;
-
-  await vscode.workspace.getConfiguration('workbench').update(
-    'colorCustomizations',
-    profile.workbench || {},
-    vscode.ConfigurationTarget.Global
-  );
-
-  await vscode.workspace.getConfiguration('editor').update(
-    'tokenColorCustomizations',
-    profile.tokens || {},
-    vscode.ConfigurationTarget.Global
-  );
-
-  return true;
-}
-
-// ═════════════════════════════════════════════════════════════
-//  БЛОК 10. Превью кода
-// ═════════════════════════════════════════════════════════════
-
-// Обёртка для «подсветки» токена, который сейчас калибруется.
-// Тонкий пунктирный контур вокруг, ничего не меняя в самом цвете.
 function hl(text, color, key, highlight) {
   const base = `<span style="color:${color}">${text}</span>`;
   if (key && key === highlight) {
@@ -781,74 +1332,59 @@ function hl(text, color, key, highlight) {
 function buildPreviewHtml(v, highlight) {
   highlight = highlight || null;
 
-  const line1 =
-    hl('// fetch user with caching', v.com, 'com', highlight);
+  const lines = [
+    hl('// fetch user with caching', v.com, 'com', highlight),
 
-  const line2 =
     hl('export async function', v.kw, 'kw', highlight) + ' ' +
-    hl('fetchUser', v.fn, 'fn', highlight) + '&lt;' +
-    hl('T', v.typ, 'typ', highlight) + '&gt;(';
+      hl('fetchUser', v.fn, 'fn', highlight) + '&lt;' +
+      hl('T', v.typ, 'typ', highlight) + '&gt;(',
 
-  const line3 =
     '  ' + hl('id', v.fg, 'fg', highlight) + ': ' +
-    hl('number', v.typ, 'typ', highlight) + ',';
+      hl('number', v.typ, 'typ', highlight) + ',',
 
-  const line4 =
-    '  opts: ' + hl('Options', v.typ, 'typ', highlight) + ' = {}';
+    '  opts: ' + hl('Options', v.typ, 'typ', highlight) + ' = {}',
 
-  const line5 =
     '): ' + hl('Promise', v.typ, 'typ', highlight) + '&lt;' +
-    hl('User', v.typ, 'typ', highlight) + '&gt; {';
+      hl('User', v.typ, 'typ', highlight) + '&gt; {',
 
-  const line6 =
     '  ' + hl('const', v.kw, 'kw', highlight) + ' maxRetries = ' +
-    hl('3', v.num, 'num', highlight) + ';';
+      hl('3', v.num, 'num', highlight) + ';',
 
-  const line7 =
     '  ' + hl('const', v.kw, 'kw', highlight) + ' enabled = ' +
-    hl('true', v.con, 'con', highlight) + ';';
+      hl('true', v.con, 'con', highlight) + ';',
 
-  const line8 =
     '  ' + hl('if', v.kw, 'kw', highlight) + ' (!id || id &gt; ' +
-    hl('1000', v.num, 'num', highlight) + ') ' +
-    hl('return', v.kw, 'kw', highlight) + ' ' +
-    hl('null', v.con, 'con', highlight) + ';';
+      hl('1000', v.num, 'num', highlight) + ') ' +
+      hl('return', v.kw, 'kw', highlight) + ' ' +
+      hl('null', v.con, 'con', highlight) + ';',
 
-  const line9 =
     '  ' + hl('const', v.kw, 'kw', highlight) + ' cacheKey = ' +
-    hl("'user:'", v.str, 'str', highlight) + ' + id;';
+      hl("'user:'", v.str, 'str', highlight) + ' + id;',
 
-  const line10 =
     '  ' + hl('const', v.kw, 'kw', highlight) + ' cached = ' +
-    hl('store', v.fg, 'fg', highlight) + '.' +
-    hl('get', v.prp, 'prp', highlight) + '(cacheKey);';
+      hl('store', v.fg, 'fg', highlight) + '.' +
+      hl('get', v.prp, 'prp', highlight) + '(cacheKey);',
 
-  const line11 =
     '  ' + hl('if', v.kw, 'kw', highlight) + ' (cached) ' +
-    hl('return', v.kw, 'kw', highlight) + ' cached;';
+      hl('return', v.kw, 'kw', highlight) + ' cached;',
 
-  const line12 =
     '  ' + hl('const', v.kw, 'kw', highlight) + ' res = ' +
-    hl('await', v.kw, 'kw', highlight) + ' ' +
-    hl('api', v.fg, 'fg', highlight) + '.' +
-    hl('get', v.prp, 'prp', highlight) + '(' +
-    hl("'/user/'", v.str, 'str', highlight) + ' + id);';
+      hl('await', v.kw, 'kw', highlight) + ' ' +
+      hl('api', v.fg, 'fg', highlight) + '.' +
+      hl('get', v.prp, 'prp', highlight) + '(' +
+      hl("'/user/'", v.str, 'str', highlight) + ' + id);',
 
-  const line13 =
     '  ' + hl('return', v.kw, 'kw', highlight) + ' res.' +
-    hl('data', v.prp, 'prp', highlight) + ';';
+      hl('data', v.prp, 'prp', highlight) + ';',
 
-  const line14 = '}';
+    '}',
+  ];
 
-  return [
-    line1, line2, line3, line4, line5,
-    line6, line7, line8, line9, line10,
-    line11, line12, line13, line14
-  ].join('\n');
+  return lines.join('\n');
 }
 
 // ═════════════════════════════════════════════════════════════
-//  БЛОК 11. Webview
+//  БЛОК 15. Webview
 // ═════════════════════════════════════════════════════════════
 
 function getHtml() {
@@ -866,9 +1402,7 @@ function getHtml() {
       padding: 20px 24px;
       margin: 0;
     }
-    .header {
-      margin-bottom: 16px;
-    }
+    .header { margin-bottom: 16px; }
     h1 {
       font-size: 16px;
       font-weight: 600;
@@ -877,7 +1411,13 @@ function getHtml() {
     .hint {
       font-size: 13px;
       opacity: 0.7;
+      margin: 0 0 10px 0;
+    }
+    .active {
+      font-size: 12px;
+      opacity: 0.55;
       margin: 0 0 12px 0;
+      font-style: italic;
     }
     .progress {
       height: 3px;
@@ -918,6 +1458,17 @@ function getHtml() {
       tab-size: 2;
       overflow: auto;
     }
+    .chrome {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 3px 10px;
+      font-size: 10px;
+      font-family: var(--vscode-font-family);
+      letter-spacing: 0.03em;
+    }
+    .chrome .left { opacity: 0.9; }
+    .chrome .right { opacity: 0.75; }
     .label {
       font-size: 12px;
       text-align: center;
@@ -952,6 +1503,7 @@ function getHtml() {
   <div class="header">
     <h1 id="title">Загрузка…</h1>
     <p class="hint" id="hint"></p>
+    <p class="active" id="active" style="display:none;"></p>
     <div class="progress"><div class="progress-bar" id="bar"></div></div>
   </div>
 
@@ -966,6 +1518,7 @@ function getHtml() {
     var grid = document.getElementById('grid');
     var titleEl = document.getElementById('title');
     var hintEl = document.getElementById('hint');
+    var activeEl = document.getElementById('active');
     var barEl = document.getElementById('bar');
     var finishBtn = document.getElementById('finish');
 
@@ -985,11 +1538,20 @@ function getHtml() {
         preview.style.color = c.fg;
         preview.innerHTML = c.preview;
 
+        var chrome = document.createElement('div');
+        chrome.className = 'chrome';
+        chrome.style.background = c.accentBg;
+        chrome.style.color = c.accentFg;
+        chrome.innerHTML =
+          '<span class="left">Calibra · main</span>' +
+          '<span class="right">UTF-8 · TS</span>';
+
         var label = document.createElement('div');
         label.className = 'label';
         label.textContent = 'Вариант ' + c.letter;
 
         el.appendChild(preview);
+        el.appendChild(chrome);
         el.appendChild(label);
         grid.appendChild(el);
       });
@@ -1001,6 +1563,14 @@ function getHtml() {
         titleEl.textContent = msg.title;
         hintEl.textContent = msg.hint || '';
         barEl.style.width = Math.round((msg.progress || 0) * 100) + '%';
+
+        if (msg.activeProfileName) {
+          activeEl.textContent = 'Активный профиль: ' + msg.activeProfileName;
+          activeEl.style.display = '';
+        } else {
+          activeEl.style.display = 'none';
+        }
+
         renderCards(msg.cards);
       }
     });
