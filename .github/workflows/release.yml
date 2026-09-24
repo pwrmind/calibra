@@ -19,11 +19,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          # Убрали строку cache: 'npm', чтобы не искать lock-файлы
 
-      - name: Install dependencies
-        run: npm install # Используем обычный install, он создаст всё сам на лету
-
+      # Так как вы собирали всё вручную и зависимостей в проекте нет,
+      # мы просто пропускаем шаг npm install и сразу упаковываем файлы
       - name: Build VSIX Package
         run: |
           npm install -g @vscode/vsce
