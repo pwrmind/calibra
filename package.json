@@ -2,9 +2,10 @@
   "name": "calibra",
   "displayName": "Calibra",
   "description": "Персональная калибровка темы VS Code под ваше зрение",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "publisher": "pwrmind",
   "pricing": "Free",
+  "icon": "images/icon.png",
   "engines": {
     "vscode": "^1.80.0"
   },
